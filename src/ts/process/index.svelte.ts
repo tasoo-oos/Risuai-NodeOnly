@@ -1434,11 +1434,19 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     }
     else if(req.type === 'streaming'){
         const reader = req.result.getReader()
-        let msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length
+        const serverMessageId = req.messageId ?? generationId
+        const existingServerMessageIndex = req.serverOwned
+            ? DBState.db.characters[selectedChar].chats[selectedChat].message.findIndex((message) => message.chatId === serverMessageId)
+            : -1
+        let msgIndex = existingServerMessageIndex !== -1
+            ? existingServerMessageIndex
+            : DBState.db.characters[selectedChar].chats[selectedChat].message.length
         let prefix = ''
-        if(arg.continue){
-            msgIndex -= 1
-            prefix = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data
+        if(arg.continue || existingServerMessageIndex !== -1){
+            if(!req.serverOwned){
+                msgIndex -= 1
+            }
+            prefix = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]?.data ?? ''
         }
         else{
             DBState.db.characters[selectedChar].chats[selectedChat].message.push({
@@ -1448,8 +1456,9 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 time: Date.now(),
                 generationInfo,
                 promptInfo,
-                chatId: generationId,
+                chatId: serverMessageId,
             })
+            msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length - 1
         }
         DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
         DBState.db.characters[selectedChar].reloadKeys += 1
@@ -1535,10 +1544,19 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         for(let i=0;i<msgs.length;i++){
             let msg = msgs[i]
             let mess = msg[1]
+            const serverMessageId = req.messageId ?? generationId
+            const existingServerMessageIndex = req.serverOwned && req.messageId
+                ? DBState.db.characters[selectedChar].chats[selectedChat].message.findIndex((message) => message.chatId === req.messageId)
+                : -1
             let msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length
             let result2 = await processScriptFull(nowChatroom, reformatContent(mess), 'editoutput', msgIndex)
-            if(i === 0 && arg.continue){
-                msgIndex -= 1
+            if(i === 0 && (arg.continue || existingServerMessageIndex !== -1)){
+                msgIndex = existingServerMessageIndex !== -1
+                    ? existingServerMessageIndex
+                    : msgIndex - 1
+                if(msgIndex < 0){
+                    msgIndex = DBState.db.characters[selectedChar].chats[selectedChat].message.length - 1
+                }
                 let beforeChat = DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex]
                 result2 = await processScriptFull(nowChatroom, reformatContent(beforeChat.data + mess), 'editoutput', msgIndex)
             }
@@ -1549,7 +1567,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             const inlayResult = runInlayScreen(currentChar, result)
             result = inlayResult.text
             emoChanged = result2.emoChanged
-            if(i === 0 && arg.continue){
+            if(i === 0 && (arg.continue || existingServerMessageIndex !== -1)){
                 DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex] = {
                     role: 'char',
                     data: result,
@@ -1557,7 +1575,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     time: Date.now(),
                     generationInfo,
                     promptInfo,
-                    chatId: generationId,
+                    chatId: serverMessageId,
                 }       
                 if(inlayResult.promise){
                     const p = await inlayResult.promise
@@ -1572,7 +1590,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     time: Date.now(),
                     generationInfo,
                     promptInfo,
-                    chatId: generationId,
+                    chatId: serverMessageId,
                 })
                 const ind = DBState.db.characters[selectedChar].chats[selectedChat].message.length - 1
                 if(inlayResult.promise){

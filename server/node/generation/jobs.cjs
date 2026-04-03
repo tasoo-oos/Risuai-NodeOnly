@@ -32,6 +32,7 @@ const TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled', 'stale']);
 // In-memory job state (superset of DB row for live jobs)
 // Map<jobId, LiveJob>
 const liveJobs = new Map();
+const jobHooks = new Map();
 
 // Prepared statements (initialized in init())
 let stmts = null;
@@ -82,6 +83,12 @@ function init(sqliteDb) {
         updateJobResult: db.prepare(`
             UPDATE generation_jobs
             SET result_text = @resultText, updated_at = @updatedAt
+            WHERE id = @id
+        `),
+
+        updateJobMessageId: db.prepare(`
+            UPDATE generation_jobs
+            SET message_id = @messageId, updated_at = @updatedAt
             WHERE id = @id
         `),
 
@@ -309,7 +316,13 @@ function completeJob(jobId, resultText) {
         resultText,
     });
 
+    const hooks = jobHooks.get(jobId);
+    if (hooks?.onComplete) {
+        hooks.onComplete(resultText);
+    }
+
     log.info('Job completed', { jobId, chatId: job.chatId });
+    jobHooks.delete(jobId);
     scheduleCleanupLiveJob(jobId);
     return job;
 }
@@ -343,7 +356,13 @@ function failJob(jobId, error) {
         error: error?.message || String(error),
     });
 
+    const hooks = jobHooks.get(jobId);
+    if (hooks?.onFail) {
+        hooks.onFail(error);
+    }
+
     log.error('Job failed', { jobId, chatId: job.chatId, error: error?.message });
+    jobHooks.delete(jobId);
     scheduleCleanupLiveJob(jobId);
     return job;
 }
@@ -375,7 +394,13 @@ function cancelJob(jobId) {
 
     emitEvent(job, 'canceled', { jobId });
 
+    const hooks = jobHooks.get(jobId);
+    if (hooks?.onCancel) {
+        hooks.onCancel();
+    }
+
     log.info('Job canceled', { jobId, chatId: job.chatId });
+    jobHooks.delete(jobId);
     scheduleCleanupLiveJob(jobId);
     return job;
 }
@@ -415,6 +440,10 @@ function emitDelta(jobId, text) {
     const job = liveJobs.get(jobId);
     if (!job) return;
     emitEvent(job, 'delta', { jobId, text });
+    const hooks = jobHooks.get(jobId);
+    if (hooks?.onDelta) {
+        hooks.onDelta(text);
+    }
 }
 
 function emitProviderRetry(jobId, reason, attempt) {
@@ -445,8 +474,12 @@ function emitMessagePlaceholder(jobId, messageId) {
     const job = liveJobs.get(jobId);
     if (!job) return;
     job.messageId = messageId;
-    stmts.updateJobStatus.run({ id: jobId, status: job.status, updatedAt: Date.now() });
+    stmts.updateJobMessageId.run({ id: jobId, messageId, updatedAt: Date.now() });
     emitEvent(job, 'message_placeholder', { jobId, messageId });
+}
+
+function setJobHooks(jobId, hooks) {
+    jobHooks.set(jobId, hooks);
 }
 
 // ─── Subscription (WebSocket) ────────────────────────────────────────────────
@@ -551,6 +584,10 @@ function updateJobResult(jobId, partialText) {
         updatedAt: job.updatedAt,
         id: jobId,
     });
+    const hooks = jobHooks.get(jobId);
+    if (hooks?.onResultText) {
+        hooks.onResultText(partialText);
+    }
 }
 
 // ─── Cleanup ─────────────────────────────────────────────────────────────────
@@ -670,6 +707,7 @@ module.exports = {
     getActiveJobs,
     setJobBatchId,
     updateJobResult,
+    setJobHooks,
     runGarbageCollection,
     JobConflictError,
     TERMINAL_STATUSES,

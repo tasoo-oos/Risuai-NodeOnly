@@ -5,12 +5,15 @@ const {
     completeJob,
     failJob,
     emitDelta,
+    emitMessagePlaceholder,
     emitProviderWarning,
+    setJobHooks,
     updateJobResult,
 } = require('./jobs.cjs');
 const { createLogger } = require('./logger.cjs');
 const { runTransport } = require('./transport.cjs');
 const { loadCanonicalDatabase } = require('./database.cjs');
+const { prepareServerMessage, updateServerMessage, markServerMessageTerminal } = require('./dbWriter.cjs');
 const { buildGenerationContext, buildTransportFromContext } = require('./promptBuilder.cjs');
 
 const log = createLogger('Service');
@@ -32,6 +35,10 @@ async function startJob(job, command) {
         throw new Error(`No generation runner registered for mode: ${mode}`);
     }
 
+    if (mode === 'server') {
+        await prepareServerJob(job, command);
+    }
+
     void Promise.resolve()
         .then(async () => {
             transitionStatus(job.id, 'running');
@@ -42,6 +49,29 @@ async function startJob(job, command) {
         });
 
     return job;
+}
+
+async function prepareServerJob(job, command) {
+    const state = await prepareServerMessage({
+        ...job,
+        requestPayload: command,
+    });
+    emitMessagePlaceholder(job.id, state.messageId);
+    setJobHooks(job.id, {
+        onResultText(fullText) {
+            updateServerMessage(state, fullText);
+        },
+        onComplete(finalText) {
+            updateServerMessage(state, finalText, { done: true });
+            markServerMessageTerminal(state);
+        },
+        onFail() {
+            markServerMessageTerminal(state);
+        },
+        onCancel() {
+            markServerMessageTerminal(state);
+        },
+    });
 }
 
 async function mockRunner(job, command) {

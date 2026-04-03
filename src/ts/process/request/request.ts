@@ -76,6 +76,8 @@ export type requestDataResponse = {
     },
     failByServerError?: boolean
     model?: string
+    messageId?: string
+    serverOwned?: boolean
 }|{
     type: "streaming",
     result: ReadableStream<StreamResponseChunk>,
@@ -83,6 +85,8 @@ export type requestDataResponse = {
         emotion?: string
     }
     model?: string
+    messageId?: string
+    serverOwned?: boolean
 }|{
     type: "multiline",
     result: ['user'|'char',string][],
@@ -90,6 +94,8 @@ export type requestDataResponse = {
         emotion?: string
     }
     model?: string
+    messageId?: string
+    serverOwned?: boolean
 }
 
 export interface StreamResponseChunk{[key:string]:string}
@@ -456,6 +462,8 @@ async function tryServerGenerationTransport(arg:RequestDataArgumentExtended, for
                 type: 'streaming',
                 result: await streamGenerationJob(serverJob.jobId, arg.abortSignal),
                 model: arg.aiModel,
+                messageId: serverJob.messageId ?? undefined,
+                serverOwned: true,
             }
         }
 
@@ -463,6 +471,8 @@ async function tryServerGenerationTransport(arg:RequestDataArgumentExtended, for
             type: 'success',
             result: await waitForGenerationJob(serverJob.jobId, arg.abortSignal),
             model: arg.aiModel,
+            messageId: serverJob.messageId ?? undefined,
+            serverOwned: true,
         }
     }
 
@@ -512,6 +522,8 @@ async function tryServerGenerationTransport(arg:RequestDataArgumentExtended, for
             type: 'streaming',
             result: await streamGenerationJob(job.jobId, arg.abortSignal),
             model: arg.aiModel,
+            messageId: job.messageId ?? undefined,
+            serverOwned: true,
         }
     }
 
@@ -519,6 +531,8 @@ async function tryServerGenerationTransport(arg:RequestDataArgumentExtended, for
         type: 'success',
         result: await waitForGenerationJob(job.jobId, arg.abortSignal),
         model: arg.aiModel,
+        messageId: job.messageId ?? undefined,
+        serverOwned: true,
     }
 }
 
