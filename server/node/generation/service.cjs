@@ -10,6 +10,8 @@ const {
 } = require('./jobs.cjs');
 const { createLogger } = require('./logger.cjs');
 const { runTransport } = require('./transport.cjs');
+const { loadCanonicalDatabase } = require('./database.cjs');
+const { buildGenerationContext, buildTransportFromContext } = require('./promptBuilder.cjs');
 
 const log = createLogger('Service');
 
@@ -72,12 +74,24 @@ async function transportRunner(job, command) {
     await runTransport(job, command.transport);
 }
 
+async function serverRunner(job, command) {
+    const db = await loadCanonicalDatabase();
+    const context = await buildGenerationContext(db, {
+        ...command,
+        characterId: job.characterId,
+        chatId: job.chatId,
+    });
+    const transport = buildTransportFromContext(db, context);
+    await runTransport(job, transport);
+}
+
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 registerRunner('mock', mockRunner);
 registerRunner('transport', transportRunner);
+registerRunner('server', serverRunner);
 
 module.exports = {
     registerRunner,

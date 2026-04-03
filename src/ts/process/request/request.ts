@@ -431,6 +431,41 @@ async function tryServerGenerationTransport(arg:RequestDataArgumentExtended, for
         return null
     }
 
+    const currentChar = arg.currentChar ?? getCurrentCharacter()
+    const currentChat = getCurrentChat()
+    const characterId = currentChar?.chaId ?? 'server_generation'
+    const chatId = currentChat?.id ?? arg.chatId ?? `${characterId}_adhoc`
+
+    if(arg.mode === 'model'){
+        const serverJob = await createGenerationJob({
+            characterId,
+            chatId,
+            model: arg.aiModel,
+            overrideModel: arg.aiModel,
+            continue: arg.continue,
+            useStreaming: arg.useStreaming,
+            mode: 'server',
+            requestOptions: {
+                temperature: arg.temperature,
+                maxTokens: arg.maxTokens,
+            },
+        })
+
+        if(arg.useStreaming){
+            return {
+                type: 'streaming',
+                result: await streamGenerationJob(serverJob.jobId, arg.abortSignal),
+                model: arg.aiModel,
+            }
+        }
+
+        return {
+            type: 'success',
+            result: await waitForGenerationJob(serverJob.jobId, arg.abortSignal),
+            model: arg.aiModel,
+        }
+    }
+
     const preview = await buildServerTransportPreview(arg, format)
     if(!preview){
         return null
@@ -453,11 +488,6 @@ async function tryServerGenerationTransport(arg:RequestDataArgumentExtended, for
             result: `Failed to parse server transport preview: ${error}`
         }
     }
-
-    const currentChar = arg.currentChar ?? getCurrentCharacter()
-    const currentChat = getCurrentChat()
-    const characterId = currentChar?.chaId ?? 'server_generation'
-    const chatId = currentChat?.id ?? arg.chatId ?? `${characterId}_adhoc`
 
     const job = await createGenerationJob({
         characterId,
