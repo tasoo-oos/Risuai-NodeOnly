@@ -17,6 +17,9 @@ const { kvGet, kvSet, kvDel, kvList,
         db: sqliteDb } = require('./db.cjs');
 const { applyPatch } = require('fast-json-patch');
 const { decodeRisuSave, encodeRisuSaveLegacy, calculateHash, normalizeJSON } = require('./utils.cjs');
+const generationJobs = require('./generation/jobs.cjs');
+const { setupGenerationRoutes } = require('./generation/routes.cjs');
+const { setupGenerationWebSocket } = require('./generation/ws.cjs');
 
 // Configuration flags for patch-based sync
 let enablePatchSync = true;
@@ -620,6 +623,8 @@ const PROXY_STREAM_MAX_PENDING_BYTES = 2 * 1024 * 1024;
 const PROXY_STREAM_MAX_BODY_BASE64_BYTES = 8 * 1024 * 1024;
 const proxyStreamJobs = new Map();
 
+generationJobs.init(sqliteDb);
+
 const authenticatedRouteLimiter = rateLimit({
     windowMs: 60 * 1000,
     max: 90,
@@ -1025,7 +1030,6 @@ function setupProxyStreamWebSocket(server) {
         try {
             const reqUrl = new URL(req.url, `http://${req.headers.host}`);
             if (!reqUrl.pathname.startsWith('/proxy-stream-jobs/') || !reqUrl.pathname.endsWith('/ws')) {
-                socket.destroy();
                 return;
             }
 
@@ -1710,6 +1714,13 @@ app.delete('/proxy-stream-jobs/:jobId', authenticatedRouteLimiter, async (req, r
     markJobDone(job);
     cleanupJob(job.id);
     res.send({ success: true });
+});
+
+setupGenerationRoutes({
+    app,
+    authenticatedRouteLimiter,
+    checkAuth,
+    checkActiveSession,
 });
 
 // app.get('/api/password', async(req, res)=> {
@@ -3067,6 +3078,7 @@ async function startServer() {
             // HTTPS
             server = https.createServer(httpsOptions, app);
             setupProxyStreamWebSocket(server);
+            setupGenerationWebSocket(server, { checkAuthorizedRequest: isAuthorizedProxyRequest });
             server.listen(port, () => {
                 console.log("[Server] HTTPS server is running.");
                 console.log(`[Server] https://localhost:${port}/`);
@@ -3075,6 +3087,7 @@ async function startServer() {
             // HTTP
             server = http.createServer(app);
             setupProxyStreamWebSocket(server);
+            setupGenerationWebSocket(server, { checkAuthorizedRequest: isAuthorizedProxyRequest });
             server.listen(port, () => {
                 console.log("[Server] HTTP server is running.");
                 console.log(`[Server] http://localhost:${port}/`);
@@ -3112,6 +3125,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
                 cleanupJob(jobId);
             }
         }
+        generationJobs.runGarbageCollection();
     }, PROXY_STREAM_GC_INTERVAL_MS);
 
     await startServer();
