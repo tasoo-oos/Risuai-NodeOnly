@@ -3,6 +3,7 @@
 const { createJob, getJob, getActiveJobs, getActiveJobForChat, cancelJob, JobConflictError } = require('./jobs.cjs');
 const { startJob } = require('./service.cjs');
 const { createLogger } = require('./logger.cjs');
+const { sanitizeTransportForPersistence } = require('./transport.cjs');
 
 const log = createLogger('Routes');
 
@@ -29,7 +30,7 @@ function setupGenerationRoutes({ app, authenticatedRouteLimiter, checkAuth, chec
                 messageId: normalizeNullableString(req.body?.messageId),
                 provider: normalizeNullableString(req.body?.provider),
                 model: normalizeNullableString(req.body?.overrideModel) || normalizeNullableString(req.body?.model),
-                requestPayload: req.body,
+                requestPayload: buildPersistedPayload(req.body),
                 requestHash: null,
                 ownerSessionId: normalizeNullableSession(req.headers['x-session-id']),
             });
@@ -116,6 +117,19 @@ function setupGenerationRoutes({ app, authenticatedRouteLimiter, checkAuth, chec
             res.status(404).json({ error: error.message || 'Generation job not found' });
         }
     });
+}
+
+function buildPersistedPayload(body) {
+    if (!body || typeof body !== 'object') {
+        return null;
+    }
+    if (body.transport) {
+        return {
+            ...body,
+            transport: sanitizeTransportForPersistence(body.transport),
+        };
+    }
+    return body;
 }
 
 function normalizeString(value) {

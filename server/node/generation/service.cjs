@@ -9,6 +9,7 @@ const {
     updateJobResult,
 } = require('./jobs.cjs');
 const { createLogger } = require('./logger.cjs');
+const { runTransport } = require('./transport.cjs');
 
 const log = createLogger('Service');
 
@@ -64,11 +65,19 @@ async function mockRunner(job, command) {
     log.info('Mock generation completed', { jobId: job.id, mode: command?.mode || 'mock' });
 }
 
+async function transportRunner(job, command) {
+    if (!command?.transport) {
+        throw new Error('Transport runner requires command.transport');
+    }
+    await runTransport(job, command.transport);
+}
+
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 registerRunner('mock', mockRunner);
+registerRunner('transport', transportRunner);
 
 module.exports = {
     registerRunner,
