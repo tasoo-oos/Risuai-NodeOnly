@@ -1,13 +1,13 @@
 'use strict';
 
-const { completeJob, emitDelta, emitProviderWarning, updateJobResult, failJob } = require('../jobs.cjs');
+const { completeJob, emitDelta, emitProviderWarning, updateJobResult } = require('../jobs.cjs');
 const { createLogger } = require('../logger.cjs');
-const { createFetchOptions, readJsonSafe, parseSSE, extractOpenAIText } = require('./common.cjs');
+const { fetchWithRetry, readJsonSafe, parseSSE, extractOpenAIText } = require('./common.cjs');
 
 const log = createLogger('ProviderOpenAI');
 
 async function runOpenAITransport(job, transport) {
-    const response = await fetch(transport.url, createFetchOptions(transport, job.abortController.signal));
+    const response = await fetchWithRetry(job, transport, 'OpenAI');
     if (!response.ok) {
         const body = await response.text();
         throw new Error(`OpenAI transport failed (${response.status}): ${body}`);

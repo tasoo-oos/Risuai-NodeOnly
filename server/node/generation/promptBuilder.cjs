@@ -197,6 +197,7 @@ function buildAnthropicTransport(db, context) {
         url,
         method: 'POST',
         useStreaming: context.useStreaming,
+        batching: Boolean(db.claudeBatching),
         headers: {
             'x-api-key': apiKey,
             'anthropic-version': '2023-06-01',

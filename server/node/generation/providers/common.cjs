@@ -1,5 +1,7 @@
 'use strict';
 
+const { emitProviderRetry } = require('../jobs.cjs');
+
 function sanitizeHeaders(headers) {
     const safe = { ...(headers || {}) };
     for (const key of Object.keys(safe)) {
@@ -20,6 +22,34 @@ function createFetchOptions(transport, signal) {
             : undefined,
         signal,
     };
+}
+
+async function fetchWithRetry(job, transport, label, options = {}) {
+    const maxAttempts = options.maxAttempts || 3;
+    const retryStatuses = new Set(options.retryStatuses || [429, 500, 502, 503, 504]);
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+            const response = await fetch(transport.url, createFetchOptions(transport, job.abortController.signal));
+            if (!retryStatuses.has(response.status) || attempt === maxAttempts) {
+                return response;
+            }
+            emitProviderRetry(job.id, `${label} returned ${response.status}`, attempt);
+        } catch (error) {
+            lastError = error;
+            if (attempt === maxAttempts || job.abortController.signal.aborted) {
+                throw error;
+            }
+            emitProviderRetry(job.id, `${label} network error: ${error.message}`, attempt);
+        }
+        await sleep(500 * attempt);
+    }
+
+    if (lastError) {
+        throw lastError;
+    }
+    throw new Error(`${label} retry loop exited unexpectedly`);
 }
 
 async function readJsonSafe(response) {
@@ -119,9 +149,14 @@ function extractGoogleText(json) {
 module.exports = {
     sanitizeHeaders,
     createFetchOptions,
+    fetchWithRetry,
     readJsonSafe,
     parseSSE,
     extractOpenAIText,
     extractAnthropicText,
     extractGoogleText,
 };
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}

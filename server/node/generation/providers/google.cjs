@@ -2,12 +2,12 @@
 
 const { completeJob, emitDelta, emitProviderWarning, updateJobResult } = require('../jobs.cjs');
 const { createLogger } = require('../logger.cjs');
-const { createFetchOptions, readJsonSafe, parseSSE, extractGoogleText } = require('./common.cjs');
+const { fetchWithRetry, readJsonSafe, parseSSE, extractGoogleText } = require('./common.cjs');
 
 const log = createLogger('ProviderGoogle');
 
 async function runGoogleTransport(job, transport) {
-    const response = await fetch(transport.url, createFetchOptions(transport, job.abortController.signal));
+    const response = await fetchWithRetry(job, transport, 'Google');
     if (!response.ok) {
         const body = await response.text();
         throw new Error(`Google transport failed (${response.status}): ${body}`);
