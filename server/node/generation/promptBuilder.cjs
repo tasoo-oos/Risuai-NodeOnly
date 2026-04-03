@@ -1,6 +1,7 @@
 'use strict';
 
 const { createLogger } = require('./logger.cjs');
+const { selectServerTools } = require('./toolRunner.cjs');
 
 const log = createLogger('PromptBuilder');
 
@@ -18,6 +19,7 @@ async function buildGenerationContext(db, command) {
     const provider = detectProvider(command.overrideModel || db.aiModel || '');
     const model = resolveModel(db, provider, command.overrideModel || db.aiModel || '');
     const messages = buildMessages(db, character, chat, command);
+    const { safeTools, unsupportedTools } = selectServerTools(command.requestOptions?.tools);
     const temperature = normalizeTemperature(command.requestOptions?.temperature, db.temperature);
     const maxTokens = Number.isFinite(command.requestOptions?.maxTokens)
         ? command.requestOptions.maxTokens
@@ -31,7 +33,9 @@ async function buildGenerationContext(db, command) {
         messages,
         temperature,
         maxTokens,
-        useStreaming: command.useStreaming !== false,
+        tools: safeTools,
+        unsupportedTools,
+        useStreaming: command.useStreaming !== false && safeTools.length === 0,
     };
 }
 
@@ -170,6 +174,16 @@ function buildOpenAITransport(db, context) {
             temperature: context.temperature,
             max_tokens: context.maxTokens,
             stream: context.useStreaming,
+            tools: context.tools?.length > 0
+                ? context.tools.map((tool) => ({
+                    type: 'function',
+                    function: {
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: tool.inputSchema,
+                    },
+                }))
+                : undefined,
         },
     };
 }
@@ -211,6 +225,13 @@ function buildAnthropicTransport(db, context) {
             max_tokens: context.maxTokens,
             temperature: context.temperature,
             stream: context.useStreaming,
+            tools: context.tools?.length > 0
+                ? context.tools.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema: tool.inputSchema,
+                }))
+                : undefined,
         },
     };
 }
@@ -242,6 +263,15 @@ function buildGoogleTransport(db, context) {
         body: {
             contents,
             systemInstruction: system ? { parts: [{ text: system }] } : undefined,
+            tools: context.tools?.length > 0
+                ? [{
+                    functionDeclarations: context.tools.map((tool) => ({
+                        name: tool.name,
+                        description: tool.description,
+                        parameters: tool.inputSchema,
+                    })),
+                }]
+                : undefined,
             generation_config: {
                 temperature: context.temperature,
                 maxOutputTokens: context.maxTokens,

@@ -1,8 +1,9 @@
 'use strict';
 
-const { completeJob, emitDelta, emitProviderWarning, setJobBatchId, transitionStatus, updateJobResult } = require('../jobs.cjs');
+const { completeJob, emitDelta, emitProviderWarning, emitToolCallFinished, emitToolCallStarted, setJobBatchId, transitionStatus, updateJobResult } = require('../jobs.cjs');
 const { createLogger } = require('../logger.cjs');
 const { fetchWithRetry, readJsonSafe, parseSSE, extractAnthropicText } = require('./common.cjs');
+const { executeToolCall } = require('../toolRunner.cjs');
 
 const log = createLogger('ProviderAnthropic');
 
@@ -40,11 +41,58 @@ async function runAnthropicTransport(job, transport) {
     }
 
     const json = await readJsonSafe(response);
+    if (Array.isArray(json?.content) && json.content.some((part) => part?.type === 'tool_use')) {
+        const followUpText = await resolveAnthropicToolCalls(job, transport, json);
+        completeJob(job.id, followUpText);
+        return;
+    }
     const text = extractAnthropicText(json);
     if (!text) {
         emitProviderWarning(job.id, 'Anthropic response returned no text content');
     }
     completeJob(job.id, text);
+}
+
+async function resolveAnthropicToolCalls(job, transport, json) {
+    const toolResults = [];
+    for (const part of json.content || []) {
+        if (part?.type !== 'tool_use') {
+            continue;
+        }
+        emitToolCallStarted(job.id, part.name, part.input);
+        const result = await executeToolCall(part.name, part.input || {});
+        emitToolCallFinished(job.id, part.name, result);
+        toolResults.push({
+            type: 'tool_result',
+            tool_use_id: part.id,
+            content: result.map((item) => ({ type: 'text', text: item.text || '' })),
+        });
+    }
+
+    const followUpTransport = {
+        ...transport,
+        body: {
+            ...transport.body,
+            stream: false,
+            messages: [
+                ...(transport.body.messages || []),
+                {
+                    role: 'assistant',
+                    content: json.content,
+                },
+                {
+                    role: 'user',
+                    content: toolResults,
+                },
+            ],
+        },
+    };
+    const followUpResponse = await fetchWithRetry(job, followUpTransport, 'Anthropic tool follow-up');
+    if (!followUpResponse.ok) {
+        throw new Error(`Anthropic tool follow-up failed (${followUpResponse.status}): ${await followUpResponse.text()}`);
+    }
+    const followUpJson = await readJsonSafe(followUpResponse);
+    return extractAnthropicText(followUpJson);
 }
 
 async function runAnthropicBatchTransport(job, transport) {

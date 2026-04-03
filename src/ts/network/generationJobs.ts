@@ -178,6 +178,10 @@ export async function streamGenerationJob(jobId: string, abortSignal?: AbortSign
                         break
                     case 'completed':
                         if (!closed) {
+                            if (!acc && event.resultText) {
+                                acc = event.resultText
+                                controller.enqueue({ '0': acc })
+                            }
                             closed = true
                             cleanup()
                             controller.close()

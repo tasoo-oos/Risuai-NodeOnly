@@ -454,6 +454,7 @@ async function tryServerGenerationTransport(arg:RequestDataArgumentExtended, for
             requestOptions: {
                 temperature: arg.temperature,
                 maxTokens: arg.maxTokens,
+                tools: arg.tools,
             },
         })
 

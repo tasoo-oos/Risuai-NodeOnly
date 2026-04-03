@@ -111,6 +111,12 @@ async function serverRunner(job, command) {
         characterId: job.characterId,
         chatId: job.chatId,
     });
+    if (context.unsupportedTools?.length) {
+        emitProviderWarning(job.id, `Unsupported server tools skipped: ${context.unsupportedTools.join(', ')}`);
+    }
+    if ((command?.useStreaming !== false) && !context.useStreaming && context.tools?.length) {
+        emitProviderWarning(job.id, 'Streaming disabled because server tool execution uses non-streaming follow-up requests');
+    }
     const transport = buildTransportFromContext(db, context);
     await runTransport(job, transport);
 }
