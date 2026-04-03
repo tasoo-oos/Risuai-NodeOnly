@@ -90,6 +90,10 @@ export class NodeStorage{
     private static sessionPending: Promise<void> | null = null
     private refreshPending: Promise<string> | null = null
 
+    static getSessionId(): string {
+        return NodeStorage.sessionId
+    }
+
     async createAuth(){
         const now = Date.now()
         if (this.cachedJwt && this.cachedJwt.expiresAt - now > 30_000) {
