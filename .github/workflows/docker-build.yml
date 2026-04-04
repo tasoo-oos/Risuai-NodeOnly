@@ -54,7 +54,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ steps.version.outputs.is_tag == 'true' && format('{0}/{1}:latest', env.REGISTRY, steps.lower.outputs.image_name) || '' }}
+            ${{ format('{0}/{1}:latest', env.REGISTRY, steps.lower.outputs.image_name) }}
             ${{ steps.version.outputs.is_tag == 'true' && format('{0}/{1}:v{2}', env.REGISTRY, steps.lower.outputs.image_name, steps.version.outputs.version) || format('{0}/{1}:{2}', env.REGISTRY, steps.lower.outputs.image_name, steps.version.outputs.version) }}
             ${{ steps.version.outputs.is_tag == 'true' && format('{0}/{1}:v{2}', env.REGISTRY, steps.lower.outputs.image_name, steps.version.outputs.minor) || '' }}
           cache-from: type=gha
