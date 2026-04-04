@@ -19,6 +19,7 @@ import { runTrigger } from "../triggers";
 import { requestClaude } from './anthropic';
 import { requestGoogleCloudVertex } from './google';
 import { requestOpenAI, requestOpenAILegacyInstruct, requestOpenAIResponseAPI } from "./openAI/requests";
+import { tryServerGenerationTransport } from './serverGeneration';
 import { applyParameters, type ModelModeExtended } from './shared';
 
 export type ToolCall = {
@@ -74,6 +75,8 @@ export type requestDataResponse = {
     },
     failByServerError?: boolean
     model?: string
+    messageId?: string
+    serverOwned?: boolean
 }|{
     type: "streaming",
     result: ReadableStream<StreamResponseChunk>,
@@ -81,6 +84,8 @@ export type requestDataResponse = {
         emotion?: string
     }
     model?: string
+    messageId?: string
+    serverOwned?: boolean
 }|{
     type: "multiline",
     result: ['user'|'char',string][],
@@ -88,6 +93,8 @@ export type requestDataResponse = {
         emotion?: string
     }
     model?: string
+    messageId?: string
+    serverOwned?: boolean
 }
 
 export interface StreamResponseChunk{[key:string]:string}
@@ -369,6 +376,11 @@ export async function requestChatDataMain(arg:requestDataArgument, model:ModelMo
 
     targ.formated = reformater(targ.formated, targ.modelInfo)
 
+    const serverTransportResult = await tryServerGenerationTransport(targ, format)
+    if(serverTransportResult){
+        return serverTransportResult
+    }
+
     switch(format){
         case LLMFormat.OpenAICompatible:
         case LLMFormat.Mistral:
@@ -413,6 +425,7 @@ export async function requestChatDataMain(arg:requestDataArgument, model:ModelMo
         result: (language.errors.unknownModel)
     }
 }
+
 
 
 
