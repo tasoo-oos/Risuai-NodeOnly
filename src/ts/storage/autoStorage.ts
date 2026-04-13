@@ -38,13 +38,6 @@ export class AutoStorage{
         return this.realStorage.createAuth()
     }
 
-    getSessionId(): string {
-        if (!this.realStorage) {
-            this.realStorage = new NodeStorage()
-        }
-        return NodeStorage.getSessionId()
-    }
-
     async exportBackup() {
         await this.Init()
         return this.realStorage.exportBackup()
