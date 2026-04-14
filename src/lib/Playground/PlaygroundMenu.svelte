@@ -1,13 +1,13 @@
 <script lang="ts">
     import { ArrowLeft } from "@lucide/svelte";
     import { language } from "src/lang";
-    import { PlaygroundStore, SizeStore, selectedCharID } from "src/ts/stores.svelte";
+    import { PlaygroundStore, SizeStore } from "src/ts/stores.svelte";
     import PlaygroundEmbedding from "./PlaygroundEmbedding.svelte";
     import PlaygroundTokenizer from "./PlaygroundTokenizer.svelte";
     import PlaygroundJinja from "./PlaygroundJinja.svelte";
     import PlaygroundSyntax from "./PlaygroundSyntax.svelte";
     import { findCharacterIndexbyId } from "src/ts/util";
-    import { characterFormatUpdate, createBlankChar } from "src/ts/characters";
+    import { changeChar, createBlankChar } from "src/ts/characters";
     import { type character } from "src/ts/storage/database.svelte";
     import { DBState } from 'src/ts/stores.svelte';
     import PlaygroundImageGen from "./PlaygroundImageGen.svelte";
@@ -35,9 +35,7 @@
             char.name = 'assistant'
             char.firstMessage = '{{none}}'
             DBState.db.characters[charIndex] = char
-            characterFormatUpdate(charIndex)
-
-            selectedCharID.set(charIndex)
+            changeChar(charIndex)
             return
         }
 
