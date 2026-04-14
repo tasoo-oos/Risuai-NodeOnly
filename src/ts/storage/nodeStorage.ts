@@ -7,6 +7,8 @@
 // /api/login, /api/token/refresh)
 import { language } from "src/lang"
 import { alertError, alertInput, waitAlert } from "../alert"
+import { decodeRisuSave, encodeRisuSaveLegacy } from "./risuSave"
+import { normalizeChat } from "./database.svelte"
 
 // Custom error class for database conflict detection
 export class ConflictError extends Error {
@@ -17,64 +19,6 @@ export class ConflictError extends Error {
         this.currentEtag = currentEtag
     }
 }
-
-// ── database.bin read cache (IndexedDB) ──────────────────────────────────────
-// Caches the database.bin blob + ETag locally so that subsequent page loads can
-// skip the full download when the server responds 304 Not Modified.
-// Only database.bin is cached — this is not a general-purpose cache layer.
-
-const DB_CACHE_DB_NAME = 'risu-db-cache'
-const DB_CACHE_STORE = 'cache'
-const DB_CACHE_KEY = 'database.bin'
-
-async function dbCacheGet(): Promise<{ blob: Uint8Array, etag: string } | null> {
-    try {
-        const db = await new Promise<IDBDatabase>((resolve, reject) => {
-            const req = indexedDB.open(DB_CACHE_DB_NAME, 1)
-            req.onupgradeneeded = () => req.result.createObjectStore(DB_CACHE_STORE)
-            req.onsuccess = () => resolve(req.result)
-            req.onerror = () => reject(req.error)
-        })
-        const tx = db.transaction(DB_CACHE_STORE, 'readonly')
-        const store = tx.objectStore(DB_CACHE_STORE)
-        const result = await new Promise<any>((resolve, reject) => {
-            const req = store.get(DB_CACHE_KEY)
-            req.onsuccess = () => resolve(req.result)
-            req.onerror = () => reject(req.error)
-        })
-        db.close()
-        if (result && result.blob && result.etag) {
-            return { blob: result.blob, etag: result.etag }
-        }
-        return null
-    } catch {
-        return null
-    }
-}
-
-async function dbCacheSet(blob: Uint8Array, etag: string): Promise<void> {
-    try {
-        const db = await new Promise<IDBDatabase>((resolve, reject) => {
-            const req = indexedDB.open(DB_CACHE_DB_NAME, 1)
-            req.onupgradeneeded = () => req.result.createObjectStore(DB_CACHE_STORE)
-            req.onsuccess = () => resolve(req.result)
-            req.onerror = () => reject(req.error)
-        })
-        const tx = db.transaction(DB_CACHE_STORE, 'readwrite')
-        const store = tx.objectStore(DB_CACHE_STORE)
-        // Atomic: blob + etag written in a single transaction
-        store.put({ blob, etag }, DB_CACHE_KEY)
-        await new Promise<void>((resolve, reject) => {
-            tx.oncomplete = () => resolve()
-            tx.onerror = () => reject(tx.error)
-        })
-        db.close()
-    } catch {
-        // Cache write failure is non-fatal
-    }
-}
-
-export { dbCacheSet }
 
 export class NodeStorage{
     private static readonly BULK_WRITE_CLIENT_BATCH = 20
@@ -257,32 +201,6 @@ export class NodeStorage{
             'file-path': Buffer.from(key, 'utf-8').toString('hex')
         }
 
-        // For database.bin, try to use cached version with ETag validation
-        if (key === 'database/database.bin') {
-            const cached = await dbCacheGet()
-            if (cached) {
-                headers['if-none-match'] = cached.etag
-                const da = await this.authFetch('/api/read', { method: "GET", headers })
-                if (da.status === 304) {
-                    this._lastDbEtag = cached.etag
-                    return Buffer.from(cached.blob)
-                }
-                if (da.status < 200 || da.status >= 300) {
-                    throw "getItem Error"
-                }
-                const etag = da.headers.get('x-db-etag')
-                if (etag) {
-                    this._lastDbEtag = etag
-                }
-                const data = Buffer.from(await da.arrayBuffer())
-                if (data.length === 0) return null
-                if (etag) {
-                    void dbCacheSet(new Uint8Array(data), etag)
-                }
-                return data
-            }
-        }
-
         const da = await this.authFetch('/api/read', { method: "GET", headers })
         if(da.status < 200 || da.status >= 300){
             throw "getItem Error"
@@ -297,11 +215,6 @@ export class NodeStorage{
         const data = Buffer.from(await da.arrayBuffer())
         if (data.length === 0){
             return null
-        }
-
-        // Cache database.bin after full download
-        if (key === 'database/database.bin' && etag) {
-            void dbCacheSet(new Uint8Array(data), etag)
         }
 
         return data
@@ -534,6 +447,142 @@ export class NodeStorage{
 
             xhr.send(file)
         })
+    }
+
+    // ── Server-side backup ─────────────────────────────────────────────────────
+
+    async saveServerBackup(
+        onProgress?: (current: number, total: number, bytes: number, totalBytes: number) => void
+    ): Promise<{ok: boolean, filename: string, size: number}> {
+        const da = await this.authFetch('/api/backup/server/save', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'x-session-id': NodeStorage.sessionId,
+            },
+        })
+        if (da.status < 200 || da.status >= 300) {
+            const body = await da.json().catch(() => ({}))
+            throw new Error(body.error || `server backup save error: ${da.status}`)
+        }
+
+        const reader = da.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let result: {ok: boolean, filename: string, size: number} | null = null
+
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop()!
+            for (const line of lines) {
+                if (!line) continue
+                const msg = JSON.parse(line)
+                if (msg.type === 'progress') {
+                    onProgress?.(msg.current, msg.total, msg.bytes, msg.totalBytes)
+                } else if (msg.type === 'done') {
+                    result = msg
+                } else if (msg.type === 'error') {
+                    throw new Error(msg.message)
+                }
+            }
+        }
+        if (!result) throw new Error('Server backup: no result received')
+        return result
+    }
+
+    async listServerBackups(): Promise<{backups: Array<{filename: string, size: number, createdAt: number}>}> {
+        const da = await this.authFetch('/api/backup/server/list')
+        if (da.status < 200 || da.status >= 300) throw new Error(`server backup list error: ${da.status}`)
+        return da.json()
+    }
+
+    async restoreServerBackup(
+        filename: string,
+        onProgress?: (bytes: number, totalBytes: number) => void
+    ): Promise<{ok: boolean, assetsRestored: number}> {
+        const da = await this.authFetch('/api/backup/server/restore', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'x-session-id': NodeStorage.sessionId,
+            },
+            body: JSON.stringify({ filename }),
+        })
+        if (da.status === 404) throw new Error('Backup file not found')
+        if (da.status === 409) throw new Error('Another import is already in progress')
+        if (da.status < 200 || da.status >= 300) {
+            const body = await da.json().catch(() => ({}))
+            throw new Error(body.error || `server backup restore error: ${da.status}`)
+        }
+
+        const reader = da.body!.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let result: {ok: boolean, assetsRestored: number} | null = null
+
+        while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split('\n')
+            buffer = lines.pop()!
+            for (const line of lines) {
+                if (!line) continue
+                const msg = JSON.parse(line)
+                if (msg.type === 'progress') {
+                    onProgress?.(msg.bytes, msg.totalBytes)
+                } else if (msg.type === 'done') {
+                    result = msg
+                } else if (msg.type === 'error') {
+                    throw new Error(msg.message)
+                }
+            }
+        }
+        if (!result) throw new Error('Server backup restore: no result received')
+        return result
+    }
+
+    async deleteServerBackup(filename: string): Promise<void> {
+        const da = await this.authFetch(`/api/backup/server/${encodeURIComponent(filename)}`, {
+            method: 'DELETE',
+        })
+        if (da.status === 404) throw new Error('Backup file not found')
+        if (da.status < 200 || da.status >= 300) throw new Error(`server backup delete error: ${da.status}`)
+    }
+
+    async downloadServerBackup(filename: string): Promise<Response> {
+        const da = await this.authFetch(`/api/backup/server/download/${encodeURIComponent(filename)}`)
+        if (da.status === 404) throw new Error('Backup file not found')
+        if (da.status < 200 || da.status >= 300) throw new Error(`server backup download error: ${da.status}`)
+        return da
+    }
+
+    // ── Chat content (runtime lazy load) ────────────────────────────────────
+
+    async fetchChatContent(chaId: string, chatIndex: number, chatId: string): Promise<any | null> {
+        const da = await this.authFetch(`/api/chat-content/${encodeURIComponent(chaId)}/${chatIndex}`, {
+            headers: { 'x-chat-id': chatId },
+        })
+        if (da.status === 404) return null
+        if (da.status < 200 || da.status >= 300) throw new Error(`fetchChatContent error: ${da.status}`)
+        const buffer = new Uint8Array(await da.arrayBuffer())
+        return normalizeChat(await decodeRisuSave(buffer))
+    }
+
+    async saveChatContent(chaId: string, chatIndex: number, chatId: string, chat: any): Promise<void> {
+        const encoded = encodeRisuSaveLegacy(chat)
+        const da = await this.authFetch(`/api/chat-content/${encodeURIComponent(chaId)}/${chatIndex}`, {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/octet-stream',
+                'x-chat-id': chatId,
+            },
+            body: encoded,
+        })
+        if (da.status < 200 || da.status >= 300) throw new Error(`saveChatContent error: ${da.status}`)
     }
 
     // ── Save-folder migration ─────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 > 🔗 **원본 프로젝트**: [kwaroran/RisuAI](https://github.com/kwaroran/RisuAI) — 이 프로젝트는 RisuAI를 기반으로 한 커뮤니티 개조 버전입니다.
-> 현재 원본 RisuAI **v2026.3.334** 까지의 변경사항이 반영되어 있습니다.
+> 현재 원본 RisuAI **v2026.3.336** 까지의 변경사항이 반영되어 있습니다.
 
 > [!CAUTION]
 > 🚧 이 프로젝트는 아직 충분히 테스트되지 않은 버전입니다. **불안정할 수 있습니다.**
@@ -12,7 +12,7 @@
 
 [![Latest Release](https://img.shields.io/github/v/release/mrbart3885/Risuai-NodeOnly?label=latest)](https://github.com/mrbart3885/Risuai-NodeOnly/releases)
 [![License: GPL-3.0](https://img.shields.io/github/license/mrbart3885/Risuai-NodeOnly)](LICENSE)
-[![Node](https://img.shields.io/badge/node-≥20-brightgreen)](https://nodejs.org/)
+[![Node](https://img.shields.io/badge/node-≥22.12-brightgreen)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/docker-supported-blue)](#2--docker)
 
 **RisuAI의 모든 기능 + 전용 편의기능, Node.js 서버 하나로.**
@@ -41,7 +41,7 @@ NodeOnly는 이 모든 분기를 걷어내고 **Node.js 서버 하나**만을 �
 
 > 💡 **Node.js 설치가 어렵지 않나요?**
 > 걱정하지 마세요. 포터블 패키지를 사용하면 Node.js를 직접 설치할 필요가 없습니다.
-> 압축 파일을 풀고 더블클릭하면 바로 실행됩니다. Docker를 사용해도 마찬가지입니다.
+> Windows, macOS, Linux 모두 지원하며, 압축을 풀고 실행하면 바로 사용할 수 있습니다. Docker를 사용해도 마찬가지입니다.
 > 자세한 내용은 아래 [설치 방법](#-설치-방법)을 참고하세요.
 
 ---
@@ -89,10 +89,10 @@ JSON 또는 `.risutheme` 형식으로 내보내기/가져오기가 가능하여,
 바인딩된 채팅에서는 전역 페르소나 선택과 무관하게 항상 바인딩된 페르소나의 이름·프롬프트가 적용됩니다.
 사이드바에서 현재 바인딩 상태를 한눈에 확인하고, 바인딩·변경·해제를 바로 할 수 있습니다.
 
-#### 🔀 사이드바 모델 선택
+#### 🔀 사이드바 프리셋/모델 선택
 
-사이드바에서 현재 모델과 보조 모델을 확인하고, 클릭하면 바로 변경할 수 있습니다.
-설정 페이지로 이동하지 않고도 모델을 빠르게 전환할 수 있어, 여러 모델을 비교하며 사용할 때 편리합니다.
+사이드바에서 현재 프리셋이나, 모델, 보조 모델을 확인하고, 클릭하면 바로 변경할 수 있습니다.
+설정 페이지로 이동하지 않고도 모델을 빠르게 전환할 수 있어, 사용할 때 편리합니다.
 
 #### ⚡ 에셋 직접 서빙
 
@@ -104,25 +104,17 @@ JSON 또는 `.risutheme` 형식으로 내보내기/가져오기가 가능하여,
 캐릭터, 채팅, 설정, 에셋 등 모든 데이터를 서버의 SQLite DB 하나에 저장합니다.
 로컬 백업(`.bin`)도 서버에서 직접 처리하며, 스트리밍 방식으로 백업 파일을 생성하므로 브라우저 메모리 제한 없이 대용량 데이터도 백업/복원할 수 있습니다.
 
+#### 📉 채팅 메모리 최적화
+
+활성 채팅 하나만 브라우저 메모리에 올리고, 나머지 채팅은 서버에 두었다가 필요할 때 가져옵니다.
+캐릭터와 채팅이 많아도 브라우저 메모리 사용량이 일정하게 유지되어, 모바일 브라우저에서 탭이 강제 종료되는 문제를 방지합니다.
+저장 파일이나 백업 형식은 변경되지 않으며, 기존 데이터와 완전히 호환됩니다.
+
 #### 🔔 업데이트 알림
 
 새 버전이 출시되면 홈 화면과 팝업으로 자동 알림합니다.
 서버가 GitHub Releases API를 주기적으로 확인하여, 일반 업데이트와 필수 업데이트를 구분하여 안내합니다.
 
-### NodeOnly 전용 설정
-
-설정 > NodeOnly에서 전용 옵션을 조정할 수 있습니다.
-
-| 설정 이름                              | 기본값 | 설명                                                                                                                                  |
-| -------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **사이드바에 모델 선택 표시**          | 켜짐   | 사이드바에서 모델/보조 모델을 바로 변경할 수 있는 숏컷을 표시합니다.                                                                 |
-| **사이드바에 페르소나 바인딩 표시**    | 켜짐   | 사이드바에서 페르소나 바인딩 상태를 확인하고 변경할 수 있는 UI를 표시합니다.                                                          |
-| **인레이 이미지(삽화) 압축 없이 저장** | 꺼짐   | 활성화하면 WebP 압축 대신 무손실 PNG로 저장합니다. 원본 화질이 유지되지만 용량이 크게 증가합니다.                                     |
-| **인레이 이미지(삽화) 우선 렌더링**    | 켜짐   | 인레이를 이미지로 먼저 렌더링하여 로딩 속도를 높입니다. 비디오/오디오 인레이를 많이 사용하는 경우 비활성화하세요.                     |
-| **전체 인레이 이미지(삽화) 압축**      | —      | 기존에 저장된 모든 인레이 이미지를 WebP로 일괄 변환합니다. 되돌릴 수 없으며, 절감된 용량을 실시간으로 표시합니다.                     |
-| **비권장 V2.0 플러그인 허용**          | 꺼짐   | V2.1 안전성 검사를 거치지 않는 V2.0 플러그인의 실행을 허용합니다. 플러그인을 명시적으로 신뢰할 때만 켜세요.                           |
-
----
 
 ## 📊 원본 RisuAI와의 차이점
 
@@ -133,6 +125,7 @@ JSON 또는 `.risutheme` 형식으로 내보내기/가져오기가 가능하여,
 | 백업         | Google Drive + 로컬                   | 서버 주도 로컬 백업 (스트리밍)      |
 | 에셋 로딩    | API → Base64 인코딩                   | 서버 직접 서빙 + HTTP 캐시 + GZIP   |
 | 삽화(인레이) | 브라우저 로컬 저장                    | 서버 통합 + WebP 압축 + 썸네일 생성 |
+| 채팅 메모리  | 전체 채팅 상주                        | 활성 채팅만 로드 (lazy loading)     |
 | 코드 구조    | 멀티 플랫폼 분기                      | 단일 코드 경로                      |
 
 ---
@@ -144,7 +137,7 @@ JSON 또는 `.risutheme` 형식으로 내보내기/가져오기가 가능하여,
 | **CPU**     | 1코어        | 2코어 이상           |
 | **RAM**     | 1GB (실행만) | 4GB 이상 (빌드 포함) |
 | **디스크**  | 1GB          | 2GB 이상             |
-| **Node.js** | 20 이상      | —                    |
+| **Node.js** | 22.12 이상   | —                    |
 
 > 💡 **포터블 패키지**나 **Docker**를 사용하면 빌드 과정이 없으므로, RAM 1GB로도 실행할 수 있습니다.
 > **직접 빌드**하는 경우(Git Clone, 설치 스크립트) 빌드 중 메모리를 많이 사용하므로 4GB 이상을 권장합니다.
@@ -157,31 +150,91 @@ JSON 또는 `.risutheme` 형식으로 내보내기/가져오기가 가능하여,
 
 ---
 
-### 1. 📦 포터블 패키지 (⭐ 추천 — Windows 전용, 가장 쉬움)
+### 1. 📦 포터블 패키지 (⭐ 추천, 가장 쉬움)
 
-> 압축 파일을 풀고 **더블클릭**하면 바로 실행됩니다.
+> 압축을 풀고 실행하면 바로 사용할 수 있습니다.
 > Node.js, Docker 같은 것을 따로 설치할 필요가 없습니다.
-
-> 💡 **macOS/Linux 사용자**: 포터블 패키지는 Windows만 제공됩니다. 아래 [Docker](#2--docker) 또는 [설치 스크립트](#3--설치-스크립트-linuxmacos-서버용) 방법을 이용해주세요.
+> Windows, macOS(Apple Silicon), Linux를 지원합니다.
 
 #### 설치 순서
 
 **1단계: 다운로드**
 
-[📥 Releases 페이지](https://github.com/mrbart3885/Risuai-NodeOnly/releases)에서 `RisuAI-NodeOnly-vX.X.X-win-x64.zip` 파일을 다운로드하세요.
+[📥 Releases 페이지](https://github.com/mrbart3885/Risuai-NodeOnly/releases)에서 자신의 OS에 맞는 파일을 다운로드하세요.
+
+| OS | 파일명 |
+|----|--------|
+| 🪟 Windows (x64) | `RisuAI-NodeOnly-vX.X.X-win-x64.zip` |
+| 🍎 macOS (Apple Silicon) | `RisuAI-NodeOnly-vX.X.X-macos-arm64.tar.gz` |
+| 🐧 Linux (x64) | `RisuAI-NodeOnly-vX.X.X-linux-x64.tar.gz` |
 
 **2단계: 압축 해제**
 
-다운로드한 파일의 압축을 원하는 위치에 풀어주세요.
+🪟 **Windows**: 다운로드한 zip 파일의 압축을 원하는 위치에 풀어주세요.
+
+🍎🐧 **macOS/Linux**: 터미널에서 실행:
+
+```bash
+tar -xzf RisuAI-NodeOnly-vX.X.X-*.tar.gz
+```
+
+> 🍎 **macOS 참고**: 처음 실행 시 "개발자를 확인할 수 없습니다" 경고가 나올 수 있습니다. 이 경우 터미널에서 아래 명령어를 한 번 실행해주세요:
+> ```bash
+> xattr -cr RisuAI-NodeOnly-vX.X.X-macos-arm64/
+> ```
 
 **3단계: 실행**
 
-`RisuAI.bat`을 더블클릭하면 브라우저가 자동으로 열리며, `http://localhost:6001`로 접속됩니다.
+🪟 **Windows**: `RisuAI.bat`을 더블클릭하면 브라우저가 자동으로 열리며, `http://localhost:6001`로 접속됩니다.
+
+🍎🐧 **macOS/Linux**: 터미널에서 실행:
+
+```bash
+cd RisuAI-NodeOnly-vX.X.X-*/
+./start.sh
+```
+
+브라우저가 자동으로 열리며, `http://localhost:6001`로 접속됩니다.
 
 #### 🔄 업데이트 방법
 
-`update.bat`을 더블클릭하면 자동으로 최신 버전을 다운로드하고 파일을 교체합니다.
+🪟 **Windows**: `update.bat`을 더블클릭
+
+🍎🐧 **macOS/Linux**: 터미널에서 실행:
+
+```bash
+./update.sh
+```
+
+자동으로 최신 버전을 다운로드하고 파일을 교체합니다.
 채팅, 캐릭터 등의 데이터(`save/` 폴더)는 그대로 보존됩니다.
+
+#### 💻 터미널로 설치 (macOS/Linux)
+
+GUI 없이 터미널에서 직접 다운로드하여 설치할 수 있습니다. 모니터 없는 서버 환경에서 유용합니다.
+
+**Linux (x64):**
+
+```bash
+VERSION=$(curl -s https://api.github.com/repos/mrbart3885/Risuai-NodeOnly/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/mrbart3885/Risuai-NodeOnly/releases/download/${VERSION}/RisuAI-NodeOnly-${VERSION}-linux-x64.tar.gz" -o risuai.tar.gz
+tar -xzf risuai.tar.gz && rm risuai.tar.gz
+cd RisuAI-NodeOnly-${VERSION}-linux-x64
+./start.sh
+```
+
+**macOS (Apple Silicon):**
+
+```bash
+VERSION=$(curl -s https://api.github.com/repos/mrbart3885/Risuai-NodeOnly/releases/latest | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+curl -fsSL "https://github.com/mrbart3885/Risuai-NodeOnly/releases/download/${VERSION}/RisuAI-NodeOnly-${VERSION}-macos-arm64.tar.gz" -o risuai.tar.gz
+tar -xzf risuai.tar.gz && rm risuai.tar.gz
+cd RisuAI-NodeOnly-${VERSION}-macos-arm64
+xattr -cr .
+./start.sh
+```
+
+> 💡 이후 업데이트는 설치된 폴더에서 `./update.sh`를 실행하면 됩니다.
 
 ---
 
@@ -238,12 +291,12 @@ docker compose pull && docker compose up -d
 
 #### 사전 준비
 
-Node.js 20 이상이 설치되어 있어야 합니다.
+Node.js 22.12 이상이 설치되어 있어야 합니다.
 
 ```bash
 # Node.js 버전 확인
 node --version
-# v20.0.0 이상이면 OK
+# v22.12.0 이상이면 OK
 ```
 
 Node.js가 없다면: [Node.js 공식 사이트](https://nodejs.org/)에서 설치하세요.
