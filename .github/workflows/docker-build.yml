@@ -123,7 +123,7 @@ jobs:
             TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.version }}"
             TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.minor }}"
           else
-            TAGS="-t ${IMAGE}:${{ steps.version.outputs.version }}"
+            TAGS="$TAGS -t ${IMAGE}:${{ steps.version.outputs.version }}"
           fi
           docker buildx imagetools create $TAGS \
             $(printf "${IMAGE}@sha256:%s " *)
