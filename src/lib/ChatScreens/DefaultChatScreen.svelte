@@ -303,6 +303,7 @@
         if(cha.length === 0) return
         const saying = cha[cha.length - 1].saying
         let sayingQu = 2
+        const removedMessages:typeof cha = []
         while(cha[cha.length - 1].role !== 'user'){
             if(cha[cha.length - 1].saying === saying){
                 sayingQu -= 1
@@ -310,15 +311,25 @@
             }
             let msg = cha.pop()
             if(!msg) return
+            removedMessages.unshift(msg)
         }
+        const lengthAfterTruncation = cha.length
         DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = cha
         await sendChatMain()
 
+        const currentMsgs = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message
+
+        // If generation failed, restore original messages
+        if (currentMsgs.length === lengthAfterTruncation) {
+            currentMsgs.push(...removedMessages, ...trailingComments)
+            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = currentMsgs
+            return
+        }
+
         // Restore trailing comments after the new message
         if (trailingComments.length > 0) {
-            const msgs = DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message
-            msgs.push(...trailingComments)
-            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = msgs
+            currentMsgs.push(...trailingComments)
+            DBState.db.characters[$selectedCharID].chats[DBState.db.characters[$selectedCharID].chatPage].message = currentMsgs
         }
 
         // Save new response to swipes
