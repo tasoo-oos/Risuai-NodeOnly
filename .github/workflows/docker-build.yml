@@ -125,6 +125,7 @@ jobs:
           else
             TAGS="-t ${IMAGE}:${{ steps.version.outputs.version }}"
           fi
+          TAGS="$TAGS -t ${IMAGE}:beta"
           docker buildx imagetools create $TAGS \
             $(printf "${IMAGE}@sha256:%s " *)
 
