@@ -118,9 +118,8 @@ jobs:
         shell: bash
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }}"
-          TAGS="-t ${IMAGE}:beta"
+          TAGS="-t ${IMAGE}:latest"
           if [[ "${{ steps.version.outputs.is_tag }}" == "true" ]]; then
-            TAGS="-t ${IMAGE}:latest"
             TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.version }}"
             TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.minor }}"
           else
