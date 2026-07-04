@@ -189,7 +189,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.AsIs,
         format: LLMFormat.Ooba,
         flags: [LLMFlags.hasFirstSystemPrompt],
-        recommended: true,
+        recommended: false,
         parameters: [],
         tokenizer: LLMTokenizer.Llama
     },
@@ -220,7 +220,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.Mistral,
         format: LLMFormat.Mistral,
         flags: [LLMFlags.hasFirstSystemPrompt, LLMFlags.mustStartWithUserInput, LLMFlags.requiresAlternateRole],
-        recommended: true,
+        recommended: false,
         parameters: ['temperature', 'presence_penalty', 'frequency_penalty', 'top_p'],
         tokenizer: LLMTokenizer.Mistral
     },
@@ -231,7 +231,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.Mistral,
         format: LLMFormat.Mistral,
         flags: [LLMFlags.hasFirstSystemPrompt, LLMFlags.mustStartWithUserInput, LLMFlags.requiresAlternateRole],
-        recommended: true,
+        recommended: false,
         parameters: ['temperature', 'presence_penalty', 'frequency_penalty', 'top_p'],
         tokenizer: LLMTokenizer.Mistral
     },
@@ -263,7 +263,7 @@ export const LLMModels: LLMModel[] = [
         format: LLMFormat.Mistral,
         flags: [LLMFlags.hasFirstSystemPrompt, LLMFlags.mustStartWithUserInput, LLMFlags.requiresAlternateRole],
         parameters: ['temperature', 'presence_penalty', 'frequency_penalty', 'top_p'],
-        recommended: true,
+        recommended: false,
         tokenizer: LLMTokenizer.Mistral
     },
     // Google models
@@ -275,7 +275,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.AsIs,
         format: LLMFormat.Kobold,
         flags: [LLMFlags.hasFirstSystemPrompt],
-        recommended: true,
+        recommended: false,
         parameters: [
             'temperature',
             'top_p',
@@ -312,7 +312,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.Cohere,
         format: LLMFormat.Cohere,
         flags: [LLMFlags.hasFirstSystemPrompt, LLMFlags.requiresAlternateRole, LLMFlags.mustStartWithUserInput],
-        recommended: true,
+        recommended: false,
         parameters: [
             'temperature', 'top_k', 'top_p', 'presence_penalty', 'frequency_penalty'
         ],
@@ -325,7 +325,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.Cohere,
         format: LLMFormat.Cohere,
         flags: [LLMFlags.hasFirstSystemPrompt, LLMFlags.requiresAlternateRole, LLMFlags.mustStartWithUserInput],
-        recommended: true,
+        recommended: false,
         parameters: [
             'temperature', 'top_k', 'top_p', 'presence_penalty', 'frequency_penalty'
         ],
@@ -386,7 +386,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.NovelAI,
         format: LLMFormat.NovelAI,
         flags: [LLMFlags.hasFullSystemPrompt],
-        recommended: true,
+        recommended: false,
         parameters: [
             'temperature', 'top_k', 'top_p', 'presence_penalty', 'frequency_penalty'
         ],
@@ -398,7 +398,7 @@ export const LLMModels: LLMModel[] = [
         provider: LLMProvider.NovelAI,
         format: LLMFormat.NovelAI,
         flags: [LLMFlags.hasFullSystemPrompt],
-        recommended: true,
+        recommended: false,
         parameters: [
             'temperature', 'top_k', 'top_p', 'presence_penalty', 'frequency_penalty'
         ],
@@ -412,7 +412,8 @@ export const LLMModels: LLMModel[] = [
         format: LLMFormat.Ollama,
         flags: [LLMFlags.hasFullSystemPrompt],
         parameters: OpenAIParameters,
-        tokenizer: LLMTokenizer.Unknown
+        tokenizer: LLMTokenizer.Unknown,
+        recommended: true
     },
     // WebLLM
     {
@@ -453,7 +454,7 @@ export const LLMModels: LLMModel[] = [
         tokenizer: LLMTokenizer.DeepSeek,
         endpoint: 'https://api.deepseek.com/beta/chat/completions',
         keyIdentifier: 'deepseek',
-        recommended: true
+        recommended: false
     },
     {
         id: 'deepseek-reasoner',
@@ -465,7 +466,7 @@ export const LLMModels: LLMModel[] = [
         tokenizer: LLMTokenizer.DeepSeek,
         endpoint: 'https://api.deepseek.com/beta/chat/completions',
         keyIdentifier: 'deepseek',
-        recommended: true
+        recommended: false
     },
     // DeepInfra
     ...makeDeepInfraModels([
@@ -658,7 +659,7 @@ export async function registerModelDynamic(){
                         ],
                         parameters: [...ClaudeParameters, 'thinking_tokens'],
                         tokenizer: LLMTokenizer.Claude,
-                        recommended: true
+                        recommended: false
                     })
                 }
             }

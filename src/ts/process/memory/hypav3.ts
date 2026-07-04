@@ -15,6 +15,8 @@ import {
 } from "src/ts/storage/database.svelte";
 import { type OpenAIChat } from "../index.svelte";
 import { requestChatData } from "../request/request";
+import { resolveChatMaxResponseTokens } from "../request/modelPresetBinding";
+import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { chatCompletion, unloadEngine } from "../webllm";
 import { hypaV3ProgressStore } from "src/ts/stores.svelte";
 import { type ChatTokenizer } from "src/ts/tokenizer";
@@ -38,6 +40,7 @@ export interface HypaV3Settings {
     preserveOrphanedMemory: boolean;
     processRegexScript: boolean;
     doNotSummarizeUserMessage: boolean;
+    summaryChunkSeparator: string;
     // Experimental
     useExperimentalImpl: boolean;
     summarizationRequestsPerMinute: number;
@@ -99,6 +102,19 @@ export interface HypaV3Result {
 const logPrefix = "[HypaV3]";
 const memoryPromptTag = "Past Events Summary";
 const summarySeparator = "\n\n";
+
+function splitBySeparator(text: string, separator: string): string[] {
+    try {
+        const regexMatch = separator.match(/^\/(.+)\/([gimuy]*)$/);
+        if (regexMatch) {
+            const [, pattern, flags] = regexMatch;
+            return text.split(new RegExp(pattern, flags));
+        }
+        return text.split(new RegExp(separator));
+    } catch {
+        return text.split("\n\n");
+    }
+}
 
 export async function hypaMemoryV3(
     chats: OpenAIChat[],
@@ -178,8 +194,9 @@ async function hypaMemoryV3MainExp(
         };
     }
 
-    // Initial token correction
-    currentTokens -= db.maxResponse;
+    // Initial token correction — must match the output-token reservation the
+    // caller added (preset max-output for ModelPreset chats, else db.maxResponse).
+    currentTokens -= resolveChatMaxResponseTokens(room);
 
     // Load existing hypa data if available
     const data: HypaV3Data = room.hypaV3Data
@@ -599,8 +616,7 @@ async function hypaMemoryV3MainExp(
         // Dynamically generate embedding texts
         const ebdTexts: EmbeddingText<Summary>[] = unusedSummaries.flatMap(
             (summary, summaryIndex) => {
-                const splitted = summary.text
-                    .split("\n\n")
+                const splitted = splitBySeparator(summary.text, settings.summaryChunkSeparator)
                     .filter((e) => e.trim().length > 0);
 
                 return splitted.map((chunk, chunkIndex) => ({
@@ -958,8 +974,9 @@ async function hypaMemoryV3Main(
         };
     }
 
-    // Initial token correction
-    currentTokens -= db.maxResponse;
+    // Initial token correction — must match the output-token reservation the
+    // caller added (preset max-output for ModelPreset chats, else db.maxResponse).
+    currentTokens -= resolveChatMaxResponseTokens(room);
 
     // Load existing hypa data if available
     const data: HypaV3Data = room.hypaV3Data
@@ -1319,8 +1336,7 @@ async function hypaMemoryV3Main(
         const summaryChunks: SummaryChunk[] = [];
 
         unusedSummaries.forEach((summary) => {
-            const splitted = summary.text
-                .split("\n\n")
+            const splitted = splitBySeparator(summary.text, settings.summaryChunkSeparator)
                 .filter((e) => e.trim().length > 0);
 
             summaryChunks.push(
@@ -1696,12 +1712,25 @@ export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolea
     if (settings.summarizationModel === "subModel") {
         console.log(logPrefix, `Using ax model ${db.subModel} for summarization.`);
 
+        // Match requestChatDataMain's model resolution: when seperateModelsForAxModels
+        // is on, the 'memory' slot overrides db.subModel for this request.
+        const actualModel = (db.seperateModelsForAxModels && db.seperateModels?.memory)
+            ? db.seperateModels.memory
+            : db.subModel;
+        let subModelUrl = '';
+        if (actualModel === 'reverse_proxy') {
+            subModelUrl = db.forceReplaceUrl ?? '';
+        } else if (actualModel?.startsWith('xcustom:::')) {
+            subModelUrl = db.customModels?.find(m => m.id === actualModel)?.url ?? '';
+        }
+
         const response = await requestChatData(
             {
                 formated,
                 bias: {},
                 useStreaming: false,
                 noMultiGen: true,
+                forceLocalNetwork: isLocalNetworkUrl(subModelUrl),
             },
             "memory"
         );
@@ -1787,6 +1816,7 @@ export function createHypaV3Preset(
         preserveOrphanedMemory: false,
         processRegexScript: false,
         doNotSummarizeUserMessage: false,
+        summaryChunkSeparator: "\\n\\n",
         // Experimental
         useExperimentalImpl: false,
         summarizationRequestsPerMinute: 20,

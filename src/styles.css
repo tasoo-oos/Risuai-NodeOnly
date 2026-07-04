@@ -3,6 +3,8 @@
 @plugin '@tailwindcss/typography';
 
 @theme {
+  --breakpoint-xs: 25rem;
+
   --color-bgcolor: var(--risu-theme-bgcolor);
   --color-darkbg: var(--risu-theme-darkbg);
   --color-borderc: var(--risu-theme-borderc);
@@ -12,6 +14,8 @@
   --color-textcolor2: var(--risu-theme-textcolor2);
   --color-darkborderc: var(--risu-theme-darkborderc);
   --color-darkbutton: var(--risu-theme-darkbutton);
+  --color-success: var(--risu-theme-success);
+  --color-primary: var(--risu-theme-primary);
 
   --color-primary-50: var(--risu-theme-primary-50);
   --color-primary-100: var(--risu-theme-primary-100);
@@ -146,6 +150,17 @@
     color: var(--color-gray-400);
   }
 
+  /* Keep the chat composer placeholder on a single line: the textarea height is
+     measured from its (empty) content, so a wrapped placeholder would overflow a
+     1-line box on narrow screens and get clipped. Ellipsis instead. Scoped to the
+     composer only — typed text still wraps normally. */
+  textarea.text-input-area {
+    text-overflow: ellipsis;
+  }
+  textarea.text-input-area::placeholder {
+    white-space: nowrap;
+  }
+
   dialog {
     margin: auto;
   }
@@ -177,6 +192,14 @@ body {
   --risu-theme-textcolor2: #64748b;
   --risu-theme-darkborderc: #4b5563;
   --risu-theme-darkbutton: #374151;
+  /* Semantic token — success/active/positive. Theme-independent: not part
+     of ColorScheme interface, so updateColorScheme() never overrides it.
+     See .agent/guide/ui.md "시맨틱 토큰". */
+  --risu-theme-success: #16a34a;
+  /* Primary — dynamic accent for "active/on" fills (toggle track, primary CTA).
+     Part of ColorScheme: updateColorScheme() overrides it per theme. The default
+     here is a fallback for the brief boot window before updateColorScheme runs. */
+  --risu-theme-primary: #3b82f6;
   --risu-height-size: 100%;
   --risu-font-family: Arial, sans-serif, serif;
 
@@ -308,8 +331,8 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 
 /* Track */
@@ -317,30 +340,31 @@ body {
   background: transparent;
 }
 
-/* Handle */
+/* Handle — global auto-hide. Transparent by default; fades in on hover.
+   The tint is a translucent form of the theme's secondary text color, so it
+   adapts to every theme. `visibility`/`opacity` are avoided: on a webkit thumb
+   they make Chrome fall back to the default system gray bar instead of hiding,
+   so we toggle the thumb's background-color instead. */
 ::-webkit-scrollbar-thumb {
-  background: rgba(136, 136, 136, 0.5);
+  background-color: transparent;
+  border-radius: 9999px;
+  transition: background-color 0.3s linear;
 }
 
-/* Handle on hover */
+/* Hovering any scrollable area (hover bubbles to ancestors) reveals the thumb. */
+*:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--color-textcolor2) 35%, transparent);
+}
+
+/* Stronger when pointing directly at the thumb. */
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(85, 85, 85, 0.5);
+  background-color: color-mix(in srgb, var(--color-textcolor2) 55%, transparent);
 }
 
-.n-scroll::-webkit-scrollbar-thumb {
-  visibility: hidden;
-  opacity: 0;
-  transition: visibility 0.5s, opacity 0.5s linear;
-}
-
-.n-scroll:hover::-webkit-scrollbar-thumb {
-  visibility: visible;
-  opacity: 1;
-}
-
-.n-scroll:focus::-webkit-scrollbar-thumb {
-  visibility: visible;
-  opacity: 1;
+/* Firefox: thin neutral scrollbar (inherits from root; no per-element auto-hide). */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-textcolor2) 35%, transparent) transparent;
 }
 
 * {

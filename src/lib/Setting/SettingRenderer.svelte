@@ -12,9 +12,14 @@
         modelInfo?: LLMModel;
         /** Optional subModelInfo, derived automatically if not provided */
         subModelInfo?: LLMModel;
+        /** 'row' renders row-capable wrappers (select/text/slider) with the label
+         * + inline help on the left and the control right-aligned. 'block' renders
+         * the ModelPreset-editor field grammar (label row + full-width control).
+         * Default 'stacked'. */
+        layout?: 'stacked' | 'row' | 'block';
     }
 
-    let { items, modelInfo, subModelInfo }: Props = $props();
+    let { items, modelInfo, subModelInfo, layout = 'stacked' }: Props = $props();
 
     // Derive modelInfo if not provided
     let effectiveModelInfo = $derived(modelInfo ?? getModelInfo(DBState.db.aiModel));
@@ -25,16 +30,36 @@
         db: DBState.db,
         modelInfo: effectiveModelInfo,
         subModelInfo: effectiveSubModelInfo,
+        layout,
     });
 </script>
 
-{#each items as item (item.id)}
-    {#if checkCondition(item, ctx)}
-        {@const Component = settingRegistry[item.type]}
-        {#if Component}
-            <Component {item} {ctx} />
-        {:else}
-            <div class="text-draculared text-xs mt-2">Unknown setting type: {item.type}</div>
+{#snippet itemList()}
+    {#each items as item (item.id)}
+        {#if checkCondition(item, ctx)}
+            {@const Component = settingRegistry[item.type]}
+            {#if Component}
+                <Component {item} {ctx} />
+            {:else}
+                <div class="text-draculared text-xs mt-2">Unknown setting type: {item.type}</div>
+            {/if}
         {/if}
-    {/if}
-{/each}
+    {/each}
+{/snippet}
+
+{#if layout === 'row'}
+    <!-- Row wrappers carry their own top border; custom items (warnings,
+         editors) don't, so they attach to the option above with no divider.
+         Drop the very first row's leading border. -->
+    <div class="[&>*:first-child]:border-t-0">
+        {@render itemList()}
+    </div>
+{:else if layout === 'block'}
+    <!-- Block fields share the row layout's divider rhythm (border-t per field,
+         first divider dropped) — see AccessibilitySettings for the reference. -->
+    <div class="[&>*:first-child]:border-t-0">
+        {@render itemList()}
+    </div>
+{:else}
+    {@render itemList()}
+{/if}

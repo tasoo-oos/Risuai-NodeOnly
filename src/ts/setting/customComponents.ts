@@ -18,9 +18,21 @@ import type { Component } from 'svelte';
 import SeparateParametersSection from 'src/lib/Setting/Pages/SeparateParametersSection.svelte';
 import TranslatorPresetSettings from 'src/lib/Setting/Pages/Language/TranslatorPresetSettings.svelte';
 import BanCharacterSetSettings from 'src/lib/Setting/Pages/Advanced/BanCharacterSetSettings.svelte';
-import CustomModelsSettings from 'src/lib/Setting/Pages/Advanced/CustomModelsSettings.svelte';
 import SettingsExportButtons from 'src/lib/Setting/Pages/Advanced/SettingsExportButtons.svelte';
 import InlayCompressButton from 'src/lib/Setting/Pages/Advanced/InlayCompressButton.svelte';
+import ColorSchemeSelect from 'src/lib/Setting/Pages/Display/ColorSchemeSelect.svelte';
+import CustomColorSchemeEditor from 'src/lib/Setting/Pages/Display/CustomColorSchemeEditor.svelte';
+import CustomTextThemeEditor from 'src/lib/Setting/Pages/Display/CustomTextThemeEditor.svelte';
+import CustomBackgroundToggle from 'src/lib/Setting/Pages/Display/CustomBackgroundToggle.svelte';
+import NullableTextColorToggle from 'src/lib/Setting/Pages/Display/NullableTextColorToggle.svelte';
+import NotificationToggle from 'src/lib/Setting/Pages/Display/NotificationToggle.svelte';
+import CustomizationWarning from 'src/lib/Setting/Pages/Display/CustomizationWarning.svelte';
+import PromptPresetBasicInfo from 'src/lib/Setting/Pages/PromptPreset/PromptPresetBasicInfo.svelte';
+import PromptEditorSection from 'src/lib/Setting/Pages/PromptPreset/PromptEditorSection.svelte';
+import PromptTemplateBlock from 'src/lib/Setting/Pages/PromptPreset/PromptTemplateBlock.svelte';
+import PromptToolsBlock from 'src/lib/Setting/Pages/PromptPreset/PromptToolsBlock.svelte';
+import PromptRegexBlock from 'src/lib/Setting/Pages/PromptPreset/PromptRegexBlock.svelte';
+import ModelRegistryRefresh from 'src/lib/Setting/Pages/Model/ModelRegistryRefresh.svelte';
 
 /**
  * Registry of custom components.
@@ -30,9 +42,21 @@ export const customComponents: Record<string, Component<any>> = {
     'SeparateParametersSection': SeparateParametersSection,
     'TranslatorPresetSettings': TranslatorPresetSettings,
     'BanCharacterSetSettings': BanCharacterSetSettings,
-    'CustomModelsSettings': CustomModelsSettings,
     'SettingsExportButtons': SettingsExportButtons,
     'InlayCompressButton': InlayCompressButton,
+    'ColorSchemeSelect': ColorSchemeSelect,
+    'CustomColorSchemeEditor': CustomColorSchemeEditor,
+    'CustomTextThemeEditor': CustomTextThemeEditor,
+    'CustomBackgroundToggle': CustomBackgroundToggle,
+    'NullableTextColorToggle': NullableTextColorToggle,
+    'NotificationToggle': NotificationToggle,
+    'CustomizationWarning': CustomizationWarning,
+    'PromptPresetBasicInfo': PromptPresetBasicInfo,
+    'PromptEditorSection': PromptEditorSection,
+    'PromptTemplateBlock': PromptTemplateBlock,
+    'PromptToolsBlock': PromptToolsBlock,
+    'PromptRegexBlock': PromptRegexBlock,
+    'ModelRegistryRefresh': ModelRegistryRefresh,
     // Add more as we migrate complex settings
 } as const;
 

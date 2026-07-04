@@ -89,7 +89,7 @@ vi.mock('uuid', () => ({
 }))
 
 const { getDatabaseMock } = vi.hoisted(() => ({
-    getDatabaseMock: vi.fn(),
+    getDatabaseMock: vi.fn<() => any>(() => ({ characters: [] })),
 }))
 
 vi.mock(import('src/ts/storage/database.svelte'), () => ({
@@ -103,6 +103,8 @@ vi.mock(
     () =>
         ({
             asBuffer: (arr: Uint8Array) => arr,
+            // modules.ts (pulled in via the stores $effect) imports this from util
+            checkPersonaBinded: () => null,
         }) as typeof import('src/ts/util'),
 )
 

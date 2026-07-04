@@ -3,6 +3,7 @@ import type { character, Database } from "./storage/database.svelte";
 import { type simpleCharacterArgument } from "./parser/parser.svelte";
 import type { alertData } from "./alert";
 import { moduleUpdate } from "./process/modules";
+import { deepTouch } from "./gui/deepTouch.svelte";
 import { resetScriptCache } from "./process/scripts";
 import type { hubType } from "./characterCards";
 import type { PluginSafetyErrors } from "./plugins/pluginSafety";
@@ -21,9 +22,11 @@ export const SizeStore = writable({
 })
 
 export const loadedStore = writable(false)
+export const isTouchDevice = writable(typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches)
 export const DynamicGUI = writable(false)
 export const sideBarClosing = writable(false)
 export const sideBarStore = writable(window.innerWidth > 1024)
+export const leftBarCollapsed = writable(false)
 export const selectedCharID = writable(-1)
 export const chatDeselected = writable(false)
 export const CurrentTriggerIdStore = writable<string | null>(null)
@@ -33,6 +36,16 @@ export const settingsOpen = writable(false)
 export const botMakerMode = writable(false)
 export const moduleBackgroundEmbedding = writable('')
 export const openPresetList = writable(false)
+export const presetSelectCallback = writable<((index: number) => void) | null>(null)
+export const openModelPresetList = writable(false)
+export const modelPresetSelectCallback = writable<((id: string) => void) | null>(null)
+export const openModelProfileBrowser = writable(false)
+// When set to a preset id, the profile browser replaces that preset's profile
+// (migrating matching userValues) instead of creating a new preset. null = create.
+export const modelProfileReplaceTarget = writable<string | null>(null)
+// Set to a newly-created preset id so the ModelPreset settings page opens it
+// for editing immediately. Consumed (cleared) by ModelPresetSettings.
+export const openModelPresetEditId = writable<string | null>(null)
 export const openModuleListStore = writable(false)
 export const openThemePresetList = writable(false)
 export const openPersonaList = writable(false)
@@ -43,6 +56,26 @@ export const MobileGUI = writable(false)
 export const MobileGUIStack = writable(0)
 export const MobileSideBar = writable(0)
 export const SettingsMenuIndex = writable(-1)
+// Boot-time backup reminder prompt — set by bootstrap and rendered by
+// BootBackupPrompt. The component resolves the user's choice (proceed/skip)
+// back via the resolve callback. See src/ts/bootstrap.ts.
+export interface BootBackupPromptData {
+    estimate: number | null
+    free: number | null
+    total: number | null
+    insufficient: boolean
+    resolve: (proceed: boolean) => void
+}
+export const bootBackupPromptStore = writable<BootBackupPromptData | null>(null)
+
+// Sub-tab index inside the System settings page. Exposed as a store so
+// other pages can deep-link via openSettings(SettingsRoute.System,
+// SystemTab.X) — see src/ts/routing.
+export const SystemSubmenuIndex = writable(0)
+// Sub-tab index inside the Accessibility settings page. A store so the model-
+// mode gear button can deep-link to the Sidebar tab — see src/ts/routing
+// (AccessibilityTab) and Setting/Pages/AccessibilitySettings.svelte.
+export const AccessibilitySubmenuIndex = writable(0)
 export const ReloadGUIPointer = writable(0)
 export const ReloadChatPointer = writable({} as Record<number, number>)
 export const ScrollToMessageStore = $state({ value: -1 })
@@ -54,12 +87,14 @@ export const CustomCSSStore = writable('')
 export const SafeModeStore = writable(false)
 export const MobileSearch = writable('')
 export const CharConfigSubMenu = writable(0)
-export const CustomGUISettingMenuStore = writable(false)
 export const alertStore = writable({
     type: 'none',
     msg: 'n',
 } as alertData)
 export const hypaV3ModalOpen = writable(false)
+// Toggle preset selector lives outside alertStore so child alertConfirm /
+// alertInput overlays can layer on top of it without overwriting state.
+export const togglePresetsOpenStore = writable(false)
 export const hypaV3ProgressStore = writable({
     open: false,
     miniMsg: '',
@@ -144,17 +179,22 @@ export type MenuDef = {
     id: string,
 }
 
+export type ChatPanelDef = {
+    id: string,
+    pluginName: string,
+    html: string,
+    className?: string,
+}
+
 export const additionalSettingsMenu = $state([] as MenuDef[])
 export const additionalFloatingActionButtons = $state([] as MenuDef[])
 export const additionalHamburgerMenu = $state([] as MenuDef[])
 export const additionalChatMenu = $state([] as MenuDef[])
+export const chatPanelStore = $state([] as ChatPanelDef[])
 export const bodyIntercepterStore = $state([] as {
     id: string,
     callback: (body: any, type: string) => Promise<any>
 }[])
-export const easyPanelStore = $state({
-    open: false,
-})
 export const popupStore = $state({
     children: null as null | import("svelte").Snippet,
     mouseX: 0,
@@ -162,14 +202,11 @@ export const popupStore = $state({
     openId: 0,
 })
 
-export const loadoutModalStore = $state({
-    open: false
-})
-
 export const popUpEditorStore = $state({
     open: false,
     value: '',
-    mode: 'default' as 'default'
+    mode: 'default' as 'default',
+    language: 'markdown' as string
 })
 
 //Set might be more ideal, however since Svelte doesn't support reactive Sets, using array for now
@@ -194,8 +231,8 @@ $effect.root(() => {
         }
     })
     $effect(() => {
-        try { $state.snapshot(DBState.db.modules) } catch (e) {
-            console.warn('[ModuleUpdate] $state.snapshot(modules) failed:', e)
+        try { deepTouch(DBState.db.modules) } catch (e) {
+            console.warn('[ModuleUpdate] deepTouch(modules) failed:', e)
             return
         }
         DBState?.db?.enabledModules

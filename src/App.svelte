@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openPersonaList, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, CustomGUISettingMenuStore, loadedStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, easyPanelStore, loadoutModalStore, popUpEditorStore } from './ts/stores.svelte';
+    import { DynamicGUI, settingsOpen, sideBarStore, openPresetList, openModelPresetList, openModelProfileBrowser, openPersonaList, personaSelectCallback, openHypaV3PresetList, openThemePresetList, MobileGUI, loadedStore, alertStore, LoadingStatusState, bookmarkListOpen, popupStore, popUpEditorStore } from './ts/stores.svelte';
     import Sidebar from './lib/SideBars/Sidebar.svelte';
     import { DBState } from './ts/stores.svelte';
     import ChatScreen from './lib/ChatScreens/ChatScreen.svelte';
@@ -11,29 +11,31 @@
     import { showRealmInfoStore, importCharacterProcess } from './ts/characterCards';
     import { importPreset, getDatabase, setDatabase } from './ts/storage/database.svelte';
     import { readModule } from './ts/process/modules';
-    import { alertNormal } from './ts/alert';
+    import { notifySuccess } from './ts/alert';
     import { language } from './lang';
     import SavePopupIconComp from './lib/Others/SavePopupIcon.svelte';
     import Botpreset from './lib/Setting/botpreset.svelte';
+    import Modelpreset from './lib/Setting/modelpreset.svelte';
+    import ModelProfileBrowser from './lib/Setting/modelProfileBrowser.svelte';
     import Themepreset from './lib/Setting/themepreset.svelte';
     import ListedPersona from './lib/Setting/listedPersona.svelte';
     import ListedHypaV3Preset from './lib/Setting/listedHypaV3Preset.svelte';
     import MobileHeader from './lib/Mobile/MobileHeader.svelte';
     import MobileBody from './lib/Mobile/MobileBody.svelte';
     import MobileFooter from './lib/Mobile/MobileFooter.svelte';
-    import CustomGUISettingMenu from './lib/Setting/Pages/CustomGUISettingMenu.svelte';
     import { checkCharOrder } from './ts/globalApi.svelte';
     import { ArrowUpIcon, GlobeIcon, PlusIcon } from '@lucide/svelte';
     import { hypaV3ModalOpen, hypaV3ProgressStore } from "./ts/stores.svelte";
     import HypaV3Modal from './lib/Others/HypaV3Modal.svelte';
     import HypaV3Progress from './lib/Others/HypaV3Progress.svelte';
     import PluginAlertModal from './lib/Others/PluginAlertModal.svelte';
-    import LoadoutModal from './lib/Others/LoadoutModal.svelte';
     import PopupEditor from './lib/Others/PopupEditor.svelte';
     import UpdatePopup from './lib/Others/UpdatePopup.svelte';
+    import BootBackupPrompt from './lib/Others/BootBackupPrompt.svelte';
     import PopupList from './lib/UI/PopupList.svelte';
-    import EasyPanel from './lib/Others/ProTools/EasyPanel.svelte';
     import LoadingOverlay from './lib/Others/LoadingOverlay.svelte';
+    import Toaster from './lib/UI/GUI/Toaster.svelte';
+    import RequestStatusToaster from './lib/UI/GUI/RequestStatusToaster.svelte';
     import sendSound from './etc/send.mp3'
 
     let gridOpen = $state(false)
@@ -59,13 +61,13 @@
         if (name.endsWith('.risup')) {
             const data = new Uint8Array(await file.arrayBuffer())
             await importPreset({ name: file.name, data })
-            alertNormal(language.successImport)
+            notifySuccess(language.successImport)
         } else if (name.endsWith('.risum')) {
             const data = new Uint8Array(await file.arrayBuffer())
             const module = await readModule(Buffer.from(data))
             const db = getDatabase()
             db.modules.push(module)
-            alertNormal(language.successImport)
+            notifySuccess(language.successImport)
         } else {
             await importCharacterProcess({
                 name: file.name,
@@ -157,7 +159,7 @@
                             aprilFoolsPage = 0
                             aprilFools = false
                         }}>
-                            Risuai  
+                            PocketRisu  
                         </a>
                     </p>
 
@@ -178,8 +180,6 @@
 
             <span class="text-sm mt-2 text-textcolor2">{LoadingStatusState.text}</span>
         </div>
-    {:else if $CustomGUISettingMenuStore}
-        <CustomGUISettingMenu />
     {:else if $settingsOpen}
         <Settings />
     {:else if $MobileGUI}
@@ -206,14 +206,18 @@
             <ChatScreen />
         {/if}
     {/if}
-    {#if $alertStore.type !== 'none'}
-        <AlertComp />
-    {/if}
+    <AlertComp />
     {#if $showRealmInfoStore}
         <RealmPopUp bind:openedData={$showRealmInfoStore} />
     {/if}
     {#if $openPresetList}
         <Botpreset close={() => {$openPresetList = false}} />
+    {/if}
+    {#if $openModelPresetList}
+        <Modelpreset close={() => {$openModelPresetList = false}} />
+    {/if}
+    {#if $openModelProfileBrowser}
+        <ModelProfileBrowser close={() => {$openModelProfileBrowser = false}} />
     {/if}
     {#if $openThemePresetList}
         <Themepreset close={() => {$openThemePresetList = false}} />
@@ -237,16 +241,13 @@
     <PluginAlertModal />
     <LoadingOverlay />
     <UpdatePopup />
+    <BootBackupPrompt />
     {#if popupStore.children}
         <PopupList />
-    {/if}
-    {#if easyPanelStore.open}
-        <EasyPanel />
-    {/if}
-    {#if !DBState.db.hideLoadout && loadoutModalStore.open}
-        <LoadoutModal />
     {/if}
     {#if popUpEditorStore.open}
         <PopupEditor />
     {/if}
+    <Toaster />
+    <RequestStatusToaster />
 </main>

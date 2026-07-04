@@ -13,13 +13,14 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
-const REPO = 'mrbart3885/Risuai-NodeOnly';
+const REPO = 'PocketRisu/PocketRisu';
 const ROOT = path.resolve(__dirname, '..');
 
 const isWin = process.platform === 'win32';
 const REQUIRED_ENTRIES = ['dist', 'server', 'package.json'];
 const REQUIRED_DIST_FILES = ['index.html'];
 const REQUIRED_WIN_ENTRIES = ['bin'];
+const MANAGED_BACKUP_PATH_ROOTS = new Set(['server', 'dist', 'scripts', 'bin', 'node_modules', '.update-tmp']);
 
 function log(msg) { process.stdout.write(`[updater] ${msg}\n`); }
 function error(msg) { process.stderr.write(`[ERROR] ${msg}\n`); process.exit(1); }
@@ -37,13 +38,39 @@ function getCurrentVersion() {
     }
 }
 
+// If the user moved the server-backup directory to a custom location *inside*
+// ROOT (e.g. <ROOT>/data/backups), the server writes the absolute path here so
+// the updater can preserve the top-level segment instead of wiping it.
+// Outside-ROOT paths return null (updater never touches them anyway).
+function getCustomBackupKeepEntry() {
+    const markerPath = path.join(ROOT, 'save', '__backup_path');
+    try {
+        if (!fs.existsSync(markerPath)) return null;
+        const raw = fs.readFileSync(markerPath, 'utf-8').trim();
+        if (!raw) return null;
+        const abs = path.resolve(raw);
+        const rel = path.relative(ROOT, abs);
+        if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+        if (!rel) {
+            error('Custom backup directory points at the PocketRisu app root. Move it to a separate folder before updating.');
+        }
+        const top = rel.split(path.sep)[0];
+        if (MANAGED_BACKUP_PATH_ROOTS.has(top)) {
+            error(`Custom backup directory is inside PocketRisu app files (${rel}). Move it to a separate folder such as data/backups before updating.`);
+        }
+        return top || null;
+    } catch {
+        return null;
+    }
+}
+
 const MAX_REDIRECTS = 10;
 
 function httpsGet(url, redirectCount = 0) {
     return new Promise((resolve, reject) => {
         if (redirectCount > MAX_REDIRECTS) return reject(new Error('Too many redirects'));
         const get = url.startsWith('https') ? https.get : http.get;
-        get(url, { headers: { 'User-Agent': 'RisuAI-Updater' } }, (res) => {
+        get(url, { headers: { 'User-Agent': 'PocketRisu-Updater' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return httpsGet(res.headers.location, redirectCount + 1).then(resolve, reject);
             }
@@ -63,7 +90,7 @@ function downloadToFile(url, dest, redirectCount = 0) {
         if (redirectCount > MAX_REDIRECTS) return reject(new Error('Too many redirects'));
         const file = fs.createWriteStream(dest);
         const get = url.startsWith('https') ? https.get : http.get;
-        get(url, { headers: { 'User-Agent': 'RisuAI-Updater' } }, (res) => {
+        get(url, { headers: { 'User-Agent': 'PocketRisu-Updater' } }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 file.close();
                 fs.unlinkSync(dest);
@@ -242,6 +269,11 @@ async function main() {
     log('Replacing files...');
     const keep = new Set(['save', 'backups', '.installed-version', '.update-tmp', 'scripts', '.env', '.npmrc', '.portable']);
     if (isWin || skipBinReplacement) keep.add('bin');
+    const customBackupKeep = getCustomBackupKeepEntry();
+    if (customBackupKeep && !keep.has(customBackupKeep)) {
+        log(`Preserving custom backup directory: ${customBackupKeep}/`);
+        keep.add(customBackupKeep);
+    }
     const backupDir = path.join(tmpDir, 'backup');
     fs.mkdirSync(backupDir, { recursive: true });
 
@@ -254,7 +286,7 @@ async function main() {
             log('Restoring files already moved to backup...');
             restoreBackupIntoRoot(backupDir, true);
             error(isWin
-                ? 'Update failed because some files are in use. Close the running RisuAI window/console first, then run update.bat again.'
+                ? 'Update failed because some files are in use. Close the running PocketRisu window/console first, then run update.bat again.'
                 : 'Update failed because some files are in use. Stop the running server first, then try again.');
         }
     }
@@ -340,7 +372,7 @@ async function main() {
     log(`Update complete! ${current} → ${latest}`);
     log('');
     if (isWin) {
-        log('Restart by running RisuAI.bat');
+        log('Restart by running PocketRisu.exe');
     } else {
         log('Restart by running ./start.sh');
     }

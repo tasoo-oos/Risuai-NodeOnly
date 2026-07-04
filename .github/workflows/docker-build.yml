@@ -118,12 +118,13 @@ jobs:
         shell: bash
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ steps.lower.outputs.image_name }}"
-          TAGS="-t ${IMAGE}:latest"
+          TAGS="-t ${IMAGE}:beta"
           if [[ "${{ steps.version.outputs.is_tag }}" == "true" ]]; then
+            TAGS="-t ${IMAGE}:latest"
             TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.version }}"
             TAGS="$TAGS -t ${IMAGE}:v${{ steps.version.outputs.minor }}"
           else
-            TAGS="$TAGS -t ${IMAGE}:${{ steps.version.outputs.version }}"
+            TAGS="-t ${IMAGE}:${{ steps.version.outputs.version }}"
           fi
           docker buildx imagetools create $TAGS \
             $(printf "${IMAGE}@sha256:%s " *)
@@ -142,11 +143,20 @@ jobs:
             const owner = context.repo.owner;
             const pkg = context.repo.repo.toLowerCase();
 
+            // Detect owner type — Organization vs User — to use the matching package API.
+            // PocketRisu/PocketRisu is an Organization, the previous mrbart3885/* was a User.
+            const { data: ownerInfo } = await github.rest.users.getByUsername({ username: owner });
+            const isOrg = ownerInfo.type === 'Organization';
+            core.info(`Owner '${owner}' type: ${ownerInfo.type}`);
+
             // 1. Get all package versions
-            const versions = await github.paginate(
-              github.rest.packages.getAllPackageVersionsForPackageOwnedByUser,
-              { package_type: 'container', package_name: pkg, username: owner, per_page: 100 }
-            );
+            const listFn = isOrg
+              ? github.rest.packages.getAllPackageVersionsForPackageOwnedByOrg
+              : github.rest.packages.getAllPackageVersionsForPackageOwnedByUser;
+            const listParams = isOrg
+              ? { package_type: 'container', package_name: pkg, org: owner, per_page: 100 }
+              : { package_type: 'container', package_name: pkg, username: owner, per_page: 100 };
+            const versions = await github.paginate(listFn, listParams);
 
             const tagged = versions.filter(v => v.metadata?.container?.tags?.length > 0);
             const untagged = versions.filter(v => !v.metadata?.container?.tags?.length);
@@ -224,12 +234,21 @@ jobs:
             for (const v of orphaned) {
               core.info(`DELETE ${v.name.substring(0, 27)}...`);
               try {
-                await github.rest.packages.deletePackageVersionForUser({
-                  package_type: 'container',
-                  package_name: pkg,
-                  username: owner,
-                  package_version_id: v.id
-                });
+                if (isOrg) {
+                  await github.rest.packages.deletePackageVersionForOrg({
+                    package_type: 'container',
+                    package_name: pkg,
+                    org: owner,
+                    package_version_id: v.id
+                  });
+                } else {
+                  await github.rest.packages.deletePackageVersionForUser({
+                    package_type: 'container',
+                    package_name: pkg,
+                    username: owner,
+                    package_version_id: v.id
+                  });
+                }
                 deleted++;
               } catch (e) {
                 core.warning(`Failed to delete ${v.id}: ${e.message}`);

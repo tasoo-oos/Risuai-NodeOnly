@@ -1,20 +1,21 @@
 import { writable, type Writable } from "svelte/store"
-import { alertCardExport, alertConfirm, alertError, alertInput, alertNormal, alertStore, alertTOS, alertWait } from "./alert"
-import { defaultSdDataFunc, type character, setDatabase, type customscript, type loreSettings, type loreBook, type triggerscript, importPreset, getDatabase, setDatabaseLite, appVer } from "./storage/database.svelte"
+import { alertCardExport, alertConfirm, alertError, alertInput, alertStore, alertTOS, alertWait, notifySuccess, notifyError } from "./alert"
+import { defaultSdDataFunc, type character, setDatabase, type customscript, type loreSettings, type loreBook, type triggerscript, importPreset, getDatabase, setDatabaseLite, appVer, newChatModelDefaults } from "./storage/database.svelte"
 import { checkNullish, decryptBuffer, isKnownUri, selectFileByDom, sleep } from "./util"
 import { language } from "src/lang"
 import { v4 as uuidv4, v4 } from 'uuid';
 import { characterFormatUpdate } from "./characters"
 import { AppendableBuffer, BlankWriter, checkCharOrder, downloadFile, forageStorage, loadAsset, LocalWriter, readImage, saveAsset, VirtualWriter } from "./globalApi.svelte"
 import { compressImage, getImageType } from "./media"
-import { SettingsMenuIndex, selectedCharID, settingsOpen } from "./stores.svelte"
+import { selectedCharID } from "./stores.svelte"
+import { openSettings, SettingsRoute } from "./routing"
 import { hasher } from "./parser/parser.svelte"
 import { type CharacterCardV3, type LorebookEntry } from '@risuai/ccardlib'
 import { reencodeImage } from "./process/files/inlays"
 import { PngChunk } from "./pngChunk"
 import type { OnnxModelFiles } from "./process/transformers"
 import { CharXImporter, CharXSkippableChecker, CharXWriter } from "./process/processzip"
-import { exportModule, readModule, type RisuModule } from "./process/modules"
+import { exportModuleLegacy, readModule, type RisuModule } from "./process/modules"
 
 
 const EXTERNAL_HUB_URL = 'https://sv.risuai.xyz';
@@ -41,11 +42,12 @@ export async function importCharacter() {
     }
 }
 
-export async function importCharacterProcess(f:{
+export async function importCharacterProcess<T extends boolean = false>(f:{
     name: string;
     data: Uint8Array|File|ReadableStream<Uint8Array>
     lightningRealmImport?:boolean
-}) {
+    returnCharacter?:T //note That this option only works with v3 charx
+}):Promise<T extends true ? character | number | null : number | null>{
     if(f.name.endsWith('json')){
         if(f.data instanceof ReadableStream){
             return null
@@ -54,13 +56,13 @@ export async function importCharacterProcess(f:{
         const da = JSON.parse(Buffer.from(data).toString('utf-8'))
         if(await importCharacterCardSpec(da)){
             let db = getDatabase()
-            return db.characters.length - 1
+            return db.characters.length - 1 as any
         }
         if((da.char_name || da.name) && (da.char_persona || da.description) && (da.char_greeting || da.first_mes)){
             let db = getDatabase()
             db.characters.push(convertOffSpecCards(da))
             setDatabaseLite(db)
-            alertNormal(language.importedCharacter)
+            notifySuccess(language.importedCharacter)
             return
         }
         else{
@@ -103,7 +105,10 @@ export async function importCharacterProcess(f:{
             }
         }
         await importer.done()
-        await importCharacterCardSpec(card, undefined, 'normal', importer.assets, lorebook)
+        let v = await importCharacterCardSpec(card, undefined, 'normal', importer.assets, lorebook, f.returnCharacter)
+        if(f.returnCharacter){
+            return v as any
+        }
         let db = getDatabase()
         return db.characters.length - 1
     }
@@ -323,7 +328,7 @@ export async function importCharacterProcess(f:{
         const imgp = await saveAsset(img)
         db.characters.push(convertOffSpecCards(charaData, imgp))
         setDatabaseLite(db)
-        alertNormal(language.importedCharacter)
+        notifySuccess(language.importedCharacter)
         return db.characters.length - 1
     }
     await importCharacterCardSpec(parsed, img, "normal", assets)
@@ -340,7 +345,7 @@ export const getRealmInfo = async (realmPath:string) => {
 
     const res = await fetch(`${hubURL}/hub/info/${realmPath}`)
     if(res.status !== 200){
-        alertError(await res.text())
+        notifyError(await res.text())
         return
     }
     showRealmInfoStore.set(await res.json())
@@ -383,7 +388,7 @@ export async function characterURLImport() {
             })
         }
     } catch (error) {
-        alertError(language.errors.noData)
+        notifyError(language.errors.noData)
         return null
     }
 
@@ -400,7 +405,7 @@ export async function characterURLImport() {
             await importFile(getFileName(res), data)
             checkCharOrder()
         } catch (error) {
-            alertError(language.errors.noData)
+            notifyError(language.errors.noData)
             return null
         }
     }
@@ -417,9 +422,8 @@ export async function characterURLImport() {
             }
         }
         db.modules.push(importData)
-        alertNormal(language.successImport)
-        SettingsMenuIndex.set(14)
-        settingsOpen.set(true)
+        notifySuccess(language.successImport)
+        openSettings(SettingsRoute.Module)
         return
     }
     if(hash.startsWith('#import_preset=')){
@@ -429,8 +433,7 @@ export async function characterURLImport() {
             name: 'imported.risupreset',
             data: importData
         })
-        SettingsMenuIndex.set(1)
-        settingsOpen.set(true)
+        openSettings(SettingsRoute.ChatBot)
         return
     }
     if(hash.startsWith('#share_character')){
@@ -454,9 +457,8 @@ export async function characterURLImport() {
         md.id = v4()
         const db = getDatabase()
         db.modules.push(md)
-        alertNormal(language.successImport)
-        SettingsMenuIndex.set(14)
-        settingsOpen.set(true)
+        notifySuccess(language.successImport)
+        openSettings(SettingsRoute.Module)
     }
     if(hash.startsWith('#share_preset')){
         const data = await fetch("/sw/share/preset")
@@ -468,8 +470,7 @@ export async function characterURLImport() {
             name: 'shared.risup',
             data: preset
         })
-        SettingsMenuIndex.set(1)
-        settingsOpen.set(true)
+        openSettings(SettingsRoute.ChatBot)
     }
     if ("launchQueue" in window) {
         const handleFiles = async (files:FileSystemFileHandle[]) => {
@@ -501,9 +502,8 @@ export async function characterURLImport() {
                 name: name,
                 data: data
             })
-            SettingsMenuIndex.set(1)
-            settingsOpen.set(true)
-            alertNormal(language.successImport)
+            openSettings(SettingsRoute.ChatBot)
+            notifySuccess(language.successImport)
             return
         }
         if(name.endsWith('risum')){
@@ -511,9 +511,8 @@ export async function characterURLImport() {
             md.id = v4()
             const db = getDatabase()
             db.modules.push(md)
-            alertNormal(language.successImport)
-            SettingsMenuIndex.set(14)
-            settingsOpen.set(true)
+            notifySuccess(language.successImport)
+            openSettings(SettingsRoute.Module)
             return
         }
     }
@@ -575,7 +574,8 @@ function convertOffSpecCards(charaData:OldTavernChar|CharacterCardV2Risu, imgp:s
             message: [],
             note: '',
             name: 'Chat 1',
-            localLore: []
+            localLore: [],
+            ...newChatModelDefaults()
         }],
         chatPage: 0,
         image: imgp,
@@ -632,7 +632,7 @@ export async function exportChar(charaID:number):Promise<string> {
 }
 
 
-async function importCharacterCardSpec(card:CharacterCardV2Risu|CharacterCardV3, img?:Uint8Array, mode:'hub'|'normal' = 'normal', assetDict:{[key:string]:string} = {}, overrideLorebook: loreBook[] = null):Promise<boolean>{
+async function importCharacterCardSpec<T extends boolean = false>(card:CharacterCardV2Risu|CharacterCardV3, img?:Uint8Array, mode:'hub'|'normal' = 'normal', assetDict:{[key:string]:string} = {}, overrideLorebook: loreBook[] = null, returnValue:T = false as T):Promise<T extends true ? character|false : boolean>{
     if(!card ||(card.spec !== 'chara_card_v2' && card.spec !== 'chara_card_v3' )){
         return false
     }
@@ -872,7 +872,8 @@ async function importCharacterCardSpec(card:CharacterCardV2Risu|CharacterCardV3,
             message: [],
             note: '',
             name: 'Chat 1',
-            localLore: []
+            localLore: [],
+            ...newChatModelDefaults()
         }],
         chatPage: 0,
         image: im,
@@ -926,6 +927,7 @@ async function importCharacterCardSpec(card:CharacterCardV2Risu|CharacterCardV3,
         prebuiltAssetCommand: data?.extensions?.risuai?.prebuiltAssetCommand ?? '',
         prebuiltAssetExclude: data?.extensions?.risuai?.prebuiltAssetExclude ?? [],
         prebuiltAssetStyle: data?.extensions?.risuai?.prebuiltAssetStyle ?? '',
+        customModuleToggle: data?.extensions?.risuai?.toggles ?? '',
     }
 
     if(card.spec === 'chara_card_v3'){
@@ -936,12 +938,13 @@ async function importCharacterCardSpec(card:CharacterCardV2Risu|CharacterCardV3,
         char.modification_date = card.data.modification_date ?? 0
     }
 
+    if(returnValue){
+        return char as any
+    }
+
     db.characters.push(char)
-    
-
-
-    alertNormal(language.importedCharacter)
-    return true
+    notifySuccess(language.importedCharacter)
+    return true as any
 
 }
 
@@ -1227,7 +1230,7 @@ export async function exportCharacterCard(char:character, type:'png'|'json'|'cha
             }
             if(type === 'json'){
                 await downloadFile(`${char.name.replace(/[<>:"/\\|?*\.\,]/g, "")}_export.json`, Buffer.from(JSON.stringify(card, null, 4), 'utf-8'))
-                alertNormal(language.successExport)
+                notifySuccess(language.successExport)
                 return
             }
     
@@ -1376,7 +1379,7 @@ export async function exportCharacterCard(char:character, type:'png'|'json'|'cha
             }
             if(type === 'json'){
                 await downloadFile(`${char.name.replace(/[<>:"/\\|?*\.\,]/g, "")}_export.json`, Buffer.from(JSON.stringify(card, null, 4), 'utf-8'))
-                alertNormal(language.successExport)
+                notifySuccess(language.successExport)
                 return
             }
 
@@ -1394,7 +1397,7 @@ export async function exportCharacterCard(char:character, type:'png'|'json'|'cha
                 }
                 delete card.data.extensions.risuai.triggerscript
                 delete card.data.extensions.risuai.customScripts
-                await writer.write("module.risum", await exportModule(md, {
+                await writer.write("module.risum", await exportModuleLegacy(md, {
                     alertEnd: false,
                     saveData: false
                 }))
@@ -1409,7 +1412,7 @@ export async function exportCharacterCard(char:character, type:'png'|'json'|'cha
         await sleep(10)
 
         if(!arg.writer){
-            alertNormal(language.successExport)
+            notifySuccess(language.successExport)
         }
 
     }
@@ -1545,6 +1548,7 @@ export function createBaseV3(char:character){
                     prebuiltAssetCommand: char.prebuiltAssetCommand ?? '',
                     prebuiltAssetExclude: char.prebuiltAssetExclude ?? [],
                     prebuiltAssetStyle: char.prebuiltAssetStyle ?? '',
+                    toggles: char.customModuleToggle ?? '',
                 },
                 depth_prompt: char.depth_prompt
             },
@@ -1639,7 +1643,7 @@ export async function downloadRisuHub(id:string, arg:{
             }
         })
         if(res.status !== 200){
-            alertError(await res.text())
+            notifyError(await res.text())
             return
         }
 

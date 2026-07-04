@@ -1,11 +1,12 @@
 import { get } from 'svelte/store';
 import { checkNullish, decryptBuffer, encryptBuffer, selectSingleFile } from '../util';
 import { changeLanguage, language } from '../../lang';
+import { DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES, DEFAULT_CHAT_LOAD_INITIAL_PAGES, normalizeChatLoadPages } from '../chatLoadPages';
 import type { RisuPlugin } from '../plugins/plugins.svelte';
 import type {triggerscript as triggerscriptMain} from '../process/triggers';
 import { downloadFile, saveAsset as saveImageGlobal } from '../globalApi.svelte';
 import { defaultAutoSuggestPrompt, defaultJailbreak, defaultMainPrompt } from './defaultPrompts';
-import { alertNormal } from '../alert';
+import { notifySuccess } from '../alert';
 import type { NAISettings } from '../process/models/nai';
 import { prebuiltNAIpresets, prebuiltPresets } from '../process/templates/templates';
 import { defaultColorScheme, type ColorScheme } from '../gui/colorscheme';
@@ -14,12 +15,24 @@ import type { OobaChatCompletionRequestParams } from '../model/ooba';
 import { type HypaV3Settings, type HypaV3Preset, createHypaV3Preset } from '../process/memory/hypav3'
 import { normalizeTranslatorPresetState, type TranslatorPreset } from '../translator/presets'
 import { safeStructuredClone } from '../polyfill';
+import { v4 as uuidv4 } from 'uuid';
+import { applyModelPresetDefaults } from '../preset/dbDefaults';
+import type { ApiKeyPoolEntry, ModelBindingFields, ModelBindingSet, ModelPreset, ModelPresetMigrationSummary, RegistryCache } from '../preset/types';
+import { emptyModelBinding } from '../preset/types';
 
 //APP_VERSION_POINT is to locate the app version in the database file for version bumping
 export let appVer = "2026.2.291" //<APP_VERSION_POINT>
 export let webAppSubVer = ''
 export const nodeOnlyVer: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'
 
+// 'custom' was a deprecated experimental theme (kwaroran's "not for real use now",
+// 2024-10) whose select option had been hidden but still reachable through legacy
+// DBs and theme presets. Coerce it to '' (NodeOnly Standard) at every entry point
+// so SettingSelect's auto-normalization can't silently flip it to 'customHTML'.
+export function normalizeTheme(theme: string | undefined | null): string {
+    if (theme === undefined || theme === null || theme === 'custom') return ''
+    return theme
+}
 
 export function setDatabase(data:Database){
     if(checkNullish(data.characters)){
@@ -127,11 +140,30 @@ export function setDatabase(data:Database){
     if(checkNullish(data.playMessage)){
         data.playMessage = false
     }
+    if(checkNullish(data.messageSound)){
+        data.messageSound = ''
+    }
+    if(checkNullish(data.messageSoundVolume)){
+        data.messageSoundVolume = 100
+    }
+    if(checkNullish(data.translateSound)){
+        data.translateSound = ''
+    }
+    if(checkNullish(data.translateSoundVolume)){
+        data.translateSoundVolume = 100
+    }
+    if(checkNullish(data.playMessageOnTranslateEnd)){
+        data.playMessageOnTranslateEnd = false
+    }
+    if(checkNullish(data.customSounds)){
+        data.customSounds = []
+    }
     if(checkNullish(data.iconsize)){
         data.iconsize = 100
     }
-    if(checkNullish(data.theme)){
-        data.theme = ''
+    data.theme = normalizeTheme(data.theme)
+    if(data.nodeOnlyStandardChatWidth !== 'standard' && data.nodeOnlyStandardChatWidth !== 'wide' && data.nodeOnlyStandardChatWidth !== 'full'){
+        data.nodeOnlyStandardChatWidth = 'standard'
     }
     if(checkNullish(data.subModel)){
         data.subModel = 'gemini-3-flash-preview'
@@ -149,9 +181,19 @@ export function setDatabase(data:Database){
         data.proxyKey = ""
     }
     if(checkNullish(data.botPresets)){
-        let defaultPreset = presetTemplate
+        let defaultPreset = createBotPresetTemplate()
         defaultPreset.name = "Default"
         data.botPresets = [defaultPreset]
+    }
+    // Ensure every botPreset has a stable string id (idempotent).
+    // Required for chat binding and new model preset system; physical store
+    // (db.botPresetsId index) remains the source of truth for active preset.
+    if (Array.isArray(data.botPresets)) {
+        for (const preset of data.botPresets) {
+            if (preset && !preset.id) {
+                preset.id = uuidv4()
+            }
+        }
     }
     if(checkNullish(data.botPresetsId)){
         data.botPresetsId = 0
@@ -230,8 +272,8 @@ export function setDatabase(data:Database){
     if(checkNullish(data.supaMemoryKey)){
         data.supaMemoryKey = ""
     }
-    if(checkNullish(data.askRemoval)){
-        data.askRemoval = true
+    if(checkNullish(data.confirmReroll)){
+        data.confirmReroll = true
     }
     if(checkNullish(data.sdConfig)){
         data.sdConfig = {
@@ -344,6 +386,8 @@ export function setDatabase(data:Database){
     }
     data.globalscript ??= []
     data.sendWithEnter ??= true
+    data.sendKeyPC ??= 'enter'
+    data.sendKeyMobile ??= 'ctrl-enter'
     data.autoSuggestPrompt ??= defaultAutoSuggestPrompt
     data.autoSuggestPrefix ??= ""
     data.OAIPrediction ??= ''
@@ -353,6 +397,9 @@ export function setDatabase(data:Database){
     data.inlayImagePriority ??= true
     data.enableBlockPartialEdit ??= false
     data.enableDragPartialEdit ??= false
+    // Concrete default so the settings toggle (reads !!value) and the runtime
+    // gate (statusEnabled) agree. Default on — see request-status-toast-infra.md.
+    data.showRequestStatus ??= true
     if(!data.formatingOrder.includes('personaPrompt')){
         data.formatingOrder.splice(data.formatingOrder.indexOf('main'),0,'personaPrompt')
     }
@@ -380,6 +427,10 @@ export function setDatabase(data:Database){
     data.assetWidth ??= -1
     data.animationSpeed ??= 0.4
     data.colorScheme ??= safeStructuredClone(defaultColorScheme)
+    // Backfill `primary` for existing colorScheme objects saved before the
+    // primary token was added. Without this, custom-scheme users (whose object
+    // is preserved as-is) would render with an undefined CSS var.
+    data.colorScheme.primary ??= defaultColorScheme.primary
     data.colorSchemeName ??= 'default'
     data.NAIsettings.starter ??= ""
     data.hypaModel ??= 'MiniLM'
@@ -517,7 +568,6 @@ export function setDatabase(data:Database){
     data.customQuotes ??= false
     data.customQuotesData ??= ['“','”','‘','’']
     data.groupOtherBotRole ??= 'user'
-    data.customGUI ??= ''
     data.customAPIFormat ??= LLMFormat.OpenAICompatible
     data.systemContentReplacement ??= `system: {{slot}}`
     data.systemRoleReplacement ??= 'user'
@@ -633,10 +683,9 @@ export function setDatabase(data:Database){
     data.showModelInSidebar ??= true
     data.showPresetInSidebar ??= true
     data.showPersonaInSidebar ??= true
+    data.nodeOnlyModelModeLock ??= 'none'
     data.disableMobileDragDrop ??= false
     data.disableToggleBinding ??= false
-    data.hideLoadout ??= true
-    data.hideEasyPanel ??= true
     data.hideAllImages ??= false
     data.hideMessagePageCount ??= false
     data.ImagenModel ??= 'imagen-4.0-generate-001'
@@ -665,18 +714,24 @@ export function setDatabase(data:Database){
     data.echoDelay ??= 0
     data.createFolderOnBranch ??= true
     data.hamburgerButtonBottom ??= false
+    data.hideLeftBarCollapseButton ??= false
     data.dynamicModelRegistry ??= true
     data.saveSignatures ??= false
-    data.enableRisuaiProTools ??= false
-    data.useNodeOnlyScrollButton ??= true
+    data.nodeOnlyScrollButtonType ??= 'four'
+    data.nodeOnlyHideRecentChats ??= false
     data.keepSessionAlive ??= 'off'
     data.localNetworkMode ??= false
     if (typeof data.localNetworkMode !== 'boolean') data.localNetworkMode = false
     data.localNetworkTimeoutSec ??= 600
     if (typeof data.localNetworkTimeoutSec !== 'number' || Number.isNaN(data.localNetworkTimeoutSec)) data.localNetworkTimeoutSec = 600
-    data.loadouts ??= []
     data.pluginCustomStorage ??= {}
     data.longPressToPopupEditor ??= false
+    data.showInputActionBar ??= true
+    data.moveInsteadOfCopyOnCMPConvert ??= false
+    data.chatLoadInitialPages = normalizeChatLoadPages(data.chatLoadInitialPages, DEFAULT_CHAT_LOAD_INITIAL_PAGES)
+    data.chatLoadAdditionalPages = normalizeChatLoadPages(data.chatLoadAdditionalPages, DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES)
+    data.fixedChatTextarea ??= true
+    applyModelPresetDefaults(data)
     changeLanguage(data.language)
     setDatabaseLite(data)
 }
@@ -737,6 +792,27 @@ export function setCurrentChat(chat:Chat){
     const char = getCurrentCharacter()
     char.chats[char.chatPage] = normalizeChat(chat)
     setCurrentCharacter(char)
+}
+
+/**
+ * Model-mode fields seeded into a freshly created (empty) chat so the
+ * "default model mode for new chats" preference (useModelPresetByDefault)
+ * applies AT BIRTH — a snapshot, not a runtime fallback. A runtime fallback
+ * would retroactively flip every existing chat that never chose a mode, and
+ * couple un-opened chats live to db.defaultModelBinding. Snapshotting here keeps
+ * each chat independent. Returns {} when the default is legacy (leave the field
+ * absent → classic), so existing chats are unaffected. Spread into new Chat
+ * literals. Do NOT call for hydration placeholders or chats being restored with
+ * their own mode.
+ */
+export function newChatModelDefaults(): Partial<Pick<Chat, 'useModelPreset' | 'modelBinding'>> {
+    const db = getDatabase()
+    if (!db.useModelPresetByDefault) return {}
+    const def = db.defaultModelBinding
+    return {
+        useModelPreset: true,
+        modelBinding: def ? structuredClone($state.snapshot(def)) : emptyModelBinding(),
+    }
 }
 
 // ── Prompt Option State (per-chat toggle sync) ──────────────────────
@@ -870,6 +946,16 @@ export interface DynamicOutput {
     dynamicRequest: boolean
 }
 
+export interface RisuPersona {
+    personaPrompt:string
+    name:string
+    icon:string
+    largePortrait?:boolean
+    id?:string
+    note?:string
+    embeddedModule?:RisuModule
+}
+
 export interface Database{
     characters: character[],
     apiType: string
@@ -879,7 +965,6 @@ export interface Database{
     jailbreak: string
     globalNote:string
     temperature: number
-    askRemoval:boolean
     maxContext: number
     maxResponse: number
     frequencyPenalty: number
@@ -912,14 +997,36 @@ export interface Database{
     autoTranslate: boolean
     fullScreen:boolean
     playMessage:boolean
+    /** Sound for the message-complete notification. Holds either a bundled
+     * preset id (e.g. "bell") or an uploaded asset path ("assets/<hash>.mp3").
+     * Empty => the default sound. Not theme-scoped. */
+    messageSound:string
+    /** Playback volume (0-100) for the message-complete notification. */
+    messageSoundVolume:number
+    /** Sound for the translation-complete notification. Same format as
+     * {@link messageSound}. Empty => the default sound. */
+    translateSound:string
+    /** Playback volume (0-100) for the translation-complete notification. */
+    translateSoundVolume:number
+    /** User-uploaded notification sounds, shown alongside bundled presets in
+     * the sound picker. `id` is a stable uuid (list identity / render key);
+     * `path` is the "assets/<hash>" asset path (content-hashed, deduped by
+     * saveAsset); `name` is the original filename for display. Not theme-scoped. */
+    customSounds:{ id:string, name:string, path:string }[]
     iconsize:number
     theme: string
+    nodeOnlyStandardChatWidth: 'standard' | 'wide' | 'full'
     subModel:string
     emotionPrompt: string,
     formatversion:number
     waifuWidth:number
     waifuWidth2:number
     botPresets:botPreset[]
+    /**
+     * @deprecated New code: use getActiveBotPreset() / setActiveBotPresetById() helpers.
+     * Kept as the physical store for upstream RisuAI .bin backup compatibility.
+     * Reorder/delete must go through withStableActivePreset() to keep this in sync.
+     */
     botPresetsId:number
     themePresets:themePreset[]
     themePresetsId:number
@@ -939,7 +1046,7 @@ export interface Database{
     promptPreprocess:boolean
     bias: [string, number][]
     swipe:boolean
-    instantRemove:boolean
+    confirmReroll:boolean
     textTheme: string
     customTextTheme: {
         FontColorStandard: string,
@@ -975,6 +1082,15 @@ export interface Database{
     }
     globalscript: customscript[],
     sendWithEnter:boolean
+    /** Desktop send-key mode. 'enter': Enter sends (Shift+Enter newline);
+     * 'ctrl-enter'/'shift-enter': that combo sends (Enter newline);
+     * 'button': only the send button (Enter newline). Replaces sendWithEnter. */
+    sendKeyPC: 'enter' | 'ctrl-enter' | 'shift-enter' | 'button'
+    /** Mobile send-key mode. Same options as sendKeyPC for users with a
+     * Bluetooth/external keyboard. 'enter': Enter sends (Shift+Enter newline);
+     * 'ctrl-enter'/'shift-enter': that combo sends (Enter newline);
+     * 'button': only the send button (Enter newline). */
+    sendKeyMobile: 'enter' | 'ctrl-enter' | 'shift-enter' | 'button'
     fixedChatTextarea:boolean
     clickToEdit: boolean
     enableBlockPartialEdit: boolean
@@ -1023,14 +1139,7 @@ export interface Database{
     nanogptUseSubscriptionEndpoint:boolean
     openrouterFallback:boolean
     selectedPersona:number
-    personas:{
-        personaPrompt:string
-        name:string
-        icon:string
-        largePortrait?:boolean
-        id?:string
-        note?:string
-    }[]
+    personas:RisuPersona[]
     personaNote:boolean
     assetWidth:number
     animationSpeed:number
@@ -1158,7 +1267,6 @@ export interface Database{
     customQuotesData?:[string, string, string, string]
     groupTemplate?:string
     groupOtherBotRole?:string
-    customGUI:string
     guiHTML:string
     OAIPrediction:string
     customAPIFormat:LLMFormat
@@ -1194,8 +1302,6 @@ export interface Database{
     showPersonaInSidebar:boolean
     disableMobileDragDrop:boolean
     disableToggleBinding:boolean
-    hideLoadout:boolean
-    hideEasyPanel:boolean
     menuSideBar:boolean
     pluginV2: RisuPlugin[]
     showSavingIcon:boolean
@@ -1230,6 +1336,9 @@ export interface Database{
     localActivationInGlobalLorebook: boolean
     showFolderName: boolean
     automaticCachePoint: boolean
+    // Show the floating request-status toast (phase / thinking+response tokens /
+    // tok/s / stall) for model-preset requests. Memory-only UI feature; default on.
+    showRequestStatus: boolean
     chatCompression: boolean
     claudeRetrivalCaching: boolean
     outputImageModal: boolean
@@ -1264,6 +1373,33 @@ export interface Database{
         params: string
         flags: LLMFlags[]
     }[]
+    modelPresets: ModelPreset[]
+    // P4 dual-regime global default binding (plan v6 §7). Copied into new chats
+    // (seeding); useModelPresetByDefault seeds the new-chat regime toggle.
+    useModelPresetByDefault?: boolean
+    defaultModelBinding?: ModelBindingSet
+    // Global model-mode lock. 'legacy'/'preset' force every chat into that
+    // regime (the per-chat dropdown is hidden); 'none' lets each chat decide,
+    // falling back to useModelPresetByDefault for chats that never chose. Read
+    // by resolveChatModelBinding (the runtime regime chokepoint).
+    nodeOnlyModelModeLock?: 'legacy' | 'preset' | 'none'
+    modelPresetMigrationVersion?: number
+    modelPresetMigrationAppliedAt?: number
+    modelPresetMigrationReport?: ModelPresetMigrationSummary
+    apiKeyPool?: Record<string, ApiKeyPoolEntry>
+    modelProfileRegistryCache?: RegistryCache
+    modelProfileRegistryLastFetched?: number
+    // Per-profile id -> last acknowledged `updatedAt`. Drives the catalog
+    // "new/updated models" notice; the user acknowledges by overwriting it
+    // with the current map. See src/ts/preset/registry/notice.ts.
+    modelRegistrySeen?: Record<string, number>
+    // Catalog display level: hide outdated/deprecated profiles from the browser
+    // and the update notice. Display-only — profiles are still downloaded.
+    modelProfileVisibilityLevel?: 'all' | 'hideDeprecated' | 'currentOnly'
+    // Opt-in custom registry source (dev branch / fork). Off ⇒ official URL.
+    // Must be https; a non-https value is rejected at sync time.
+    useCustomModelRegistry?: boolean
+    modelProfileRegistryBaseUrl?: string
     igpPrompt:string
     useTokenizerCaching:boolean
     showMenuHypaMemoryModal:boolean
@@ -1288,8 +1424,16 @@ export interface Database{
     dynamicOutput?:DynamicOutput
     hubServerType?:string
     pluginCustomStorage:{[key:string]:any}
-    loadouts: Loadout[]
+    // Best-effort "which plugin last wrote this key" sidecar for the save-file
+    // plugin storage. Additive metadata only — never wraps the value itself, so
+    // existing plugins read their keys unchanged. Populated for new V3 writes;
+    // legacy/V2 keys stay unrecorded. See pluginStorageMeta.ts.
+    pluginStorageMeta?:{[key:string]:{plugin:string,updatedAt:number}}
     longPressToPopupEditor?: boolean
+    showInputActionBar?: boolean
+    moveInsteadOfCopyOnCMPConvert?:boolean
+    chatLoadInitialPages?: number
+    chatLoadAdditionalPages?: number
     ImagenModel:string
     ImagenImageSize:string
     ImagenAspectRatio:string
@@ -1323,12 +1467,12 @@ export interface Database{
     echoDelay?:number
     createFolderOnBranch?:boolean
     hamburgerButtonBottom?:boolean
+    hideLeftBarCollapseButton?:boolean
     enableRemoteSaving?:boolean
     blockquoteStyling?:boolean
     dynamicModelRegistry?:boolean
-    enableRisuaiProTools?:boolean
-    useNodeOnlyScrollButton?:boolean
-    epEnabled?:boolean
+    nodeOnlyScrollButtonType?:'four'|'two'|'off'
+    nodeOnlyHideRecentChats?:boolean
     seperateParametersByModel?:boolean
     disableSeperateParameterChangeOnPresetChange?:boolean
     saveSignatures?:boolean
@@ -1489,6 +1633,21 @@ export interface character{
     private?:boolean
     additionalText:string
     oaiVoice?:string
+    oaiTTSConfig?:{
+        /** User opted into advanced OpenAI-compatible settings. When false/absent,
+         *  tts.ts ignores the other fields and uses the legacy oaiVoice + db.openAIKey path. */
+        enabled?: boolean
+        /** Base URL, trailing slash trimmed at runtime. Falls back to 'https://api.openai.com/v1'. */
+        baseURL?: string
+        /** Per-character API key. Falls back to db.openAIKey; the Authorization header is omitted entirely when both are empty. */
+        apiKey?: string
+        /** Model ID. Falls back to 'tts-1'. */
+        model?: string
+        /** Freeform voice ID for custom endpoints. Falls back to character.oaiVoice, then to 'alloy'. */
+        voice?: string
+        /** Response format. Falls back to 'mp3'. */
+        format?: 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm'
+    }
     virtualscript?:string
     scriptstate?:{[key:string]:string|number|boolean}
     depth_prompt?: { depth: number, prompt: string }
@@ -1527,6 +1686,7 @@ export interface character{
     modules?:string[]
     coldstorage?:string
     coldStoragedChats?:string[]
+    customModuleToggle?:string
 }
 
 
@@ -1561,6 +1721,7 @@ export function purgeUnsupportedGroupChats(db: Database): number {
     return before - db.characters.length
 }
 export interface botPreset{
+    id?: string
     name?:string
     apiType?: string
     openAIKey?: string
@@ -1661,6 +1822,9 @@ export interface botPreset{
     fallbackWhenBlankResponse?: boolean
     verbosity?:number
     dynamicOutput?:DynamicOutput
+    modelBinding?: ModelBindingFields['modelBinding']
+    subModelBinding?: ModelBindingFields['subModelBinding']
+    taskModelBindings?: ModelBindingFields['taskModelBindings']
 }
 
 
@@ -1668,9 +1832,9 @@ export interface themePreset{
     name: string
     // Theme tab (submenu 0)
     theme: string
+    nodeOnlyStandardChatWidth?: 'standard' | 'wide' | 'full'
     guiHTML: string
     customCSS: string
-    customGUI: string
     waifuWidth: number
     waifuWidth2: number
     colorSchemeName: string
@@ -1705,8 +1869,6 @@ export interface themePreset{
     hideMessagePageCount?: boolean
     showFolderName: boolean
     customBackground: string
-    playMessage: boolean
-    playMessageOnTranslateEnd: boolean
     roundIcons: boolean
     textScreenColor?: string
     textBorder?: boolean
@@ -1724,7 +1886,6 @@ export interface themePreset{
     customQuotesData?: [string, string, string, string]
     betaMobileGUI: boolean
     menuSideBar: boolean
-    notification: boolean
     useChatSticker: boolean
 }
 
@@ -1882,7 +2043,13 @@ export interface Chat{
     modules?:string[]
     id?:string
     bindedPersona?:string
+    bindedBotPreset?:string
     fmIndex?:number
+    /** Per-chat toggle to exclude the first message (greeting) from the prompt
+     * context. The greeting still renders in the UI. Absent/undefined => included
+     * (default). The greeting lives on the character, not in `message`, so this
+     * cannot reuse the message-level `disabled` flag. */
+    firstMessageDisabled?:boolean
     hypaV3Data?:SerializableHypaV3Data
     folderId?:string
     lastDate?:number
@@ -1890,28 +2057,27 @@ export interface Chat{
     bookmarkNames?: { [chatId: string]: string };
     supaMemory?: boolean
     savedToggleValues?: Record<string, string>
+    // P4 dual-regime: per-chat model preset binding (plan v6 §7). useModelPreset
+    // is the regime toggle; modelBinding (the bundle) persists across toggling so
+    // it is restored on re-enable. Off (or absent) => classic global model path.
+    useModelPreset?: boolean
+    modelBinding?: ModelBindingSet
+    /** Per-chat opt-in: when this chat's MAIN request goes through a ModelPreset,
+     * override the preset's sampling parameters with the active prompt preset's
+     * (temperature, top_p, penalties, ...). Off (or absent) => preset params only.
+     * No effect in classic mode, where prompt-preset params already apply. */
+    usePromptPresetParams?: boolean
     /** Runtime-only: true while awaiting hydration from server. Never persisted. */
     _placeholder?: boolean
 }
 
-/**
- * Minimal stub stored in database.bin — full chat data lives server-side.
- * Only exists in encoded/decoded data; at runtime stubs are converted to placeholder Chats.
- */
-export interface ChatStub {
-    id: string
-    name: string
-    lastDate?: number
-    folderId?: string
-    modules?: string[]
-    _stub: true
-}
+// `ChatStub` and `isChatStub` live in chatStub.ts so they can be unit-tested
+// without loading the Svelte runtime. Re-exported here to preserve existing
+// import paths across the codebase.
+export type { ChatStub } from './chatStub'
+export { isChatStub } from './chatStub'
 
-export type ChatOrStub = Chat | ChatStub
-
-export function isChatStub(chat: ChatOrStub): chat is ChatStub {
-    return '_stub' in chat && chat._stub === true
-}
+export type ChatOrStub = Chat | import('./chatStub').ChatStub
 
 export interface ChatFolder{
     id:string
@@ -2062,6 +2228,7 @@ export const defaultOoba:OobaSettings = {
 
 
 export const presetTemplate:botPreset = {
+    id: '',
     name: "New Preset",
     apiType: "gemini-3-flash-preview",
     openAIKey: "",
@@ -2099,9 +2266,9 @@ export const presetTemplate:botPreset = {
 export const themePresetTemplate: themePreset = {
     name: "New Theme",
     theme: '',
+    nodeOnlyStandardChatWidth: 'standard',
     guiHTML: '',
     customCSS: '',
-    customGUI: '',
     waifuWidth: 100,
     waifuWidth2: 100,
     colorSchemeName: 'default',
@@ -2134,8 +2301,6 @@ export const themePresetTemplate: themePreset = {
     hideMessagePageCount: false,
     showFolderName: false,
     customBackground: '',
-    playMessage: false,
-    playMessageOnTranslateEnd: false,
     roundIcons: false,
     textScreenColor: null,
     textBorder: false,
@@ -2153,7 +2318,6 @@ export const themePresetTemplate: themePreset = {
     customQuotesData: ['"', '"', '\u2018', '\u2019'],
     betaMobileGUI: false,
     menuSideBar: false,
-    notification: false,
     useChatSticker: false,
 }
 
@@ -2171,6 +2335,74 @@ export const defaultSdDataFunc = () =>{
     return safeStructuredClone(defaultSdData)
 }
 
+// ─────────────────────────────────────────────────────────────
+// botPreset id-based helper layer
+//
+// Physical storage stays index-based (db.botPresetsId: number) for upstream
+// RisuAI .bin backup compatibility. New code (chat binding etc.) should use
+// these helpers so reorder/delete operations stay stable: withStableActivePreset
+// preserves the active preset by id while the underlying array is mutated.
+// ─────────────────────────────────────────────────────────────
+
+export function createBotPresetTemplate(): botPreset {
+    const preset = safeStructuredClone(presetTemplate)
+    preset.id = uuidv4()
+    return preset
+}
+
+export function getActiveBotPreset(): botPreset | null {
+    const db = getDatabase()
+    if (!Array.isArray(db.botPresets) || db.botPresetsId < 0 || db.botPresetsId >= db.botPresets.length) {
+        return null
+    }
+    return db.botPresets[db.botPresetsId] ?? null
+}
+
+export function getActiveBotPresetId(): string | undefined {
+    return getActiveBotPreset()?.id || undefined
+}
+
+export function getBotPresetById(id: string): botPreset | null {
+    const db = getDatabase()
+    if (!id || !Array.isArray(db.botPresets)) return null
+    return db.botPresets.find((p) => p?.id === id) ?? null
+}
+
+export function getBotPresetIndexById(id: string): number {
+    const db = getDatabase()
+    if (!id || !Array.isArray(db.botPresets)) return -1
+    return db.botPresets.findIndex((p) => p?.id === id)
+}
+
+export function setActiveBotPresetById(id: string | undefined): void {
+    const db = getDatabase()
+    if (id === undefined) {
+        db.botPresetsId = -1
+        return
+    }
+    const idx = getBotPresetIndexById(id)
+    if (idx >= 0) {
+        db.botPresetsId = idx
+    }
+}
+
+/**
+ * Run a botPresets mutation (reorder / splice) while preserving which preset
+ * is active by its stable string id. Replaces ad-hoc index-recalculation code
+ * paths and keeps db.botPresetsId in sync with the active preset's new index.
+ */
+export function withStableActivePreset(fn: () => void): void {
+    const activeId = getActiveBotPresetId()
+    fn()
+    const db = getDatabase()
+    if (activeId) {
+        const newIdx = getBotPresetIndexById(activeId)
+        db.botPresetsId = newIdx >= 0 ? newIdx : 0
+    } else if (Array.isArray(db.botPresets) && db.botPresetsId >= db.botPresets.length) {
+        db.botPresetsId = Math.max(0, db.botPresets.length - 1)
+    }
+}
+
 export function saveCurrentPreset(){
     let db = getDatabase()
     let pres = db.botPresets
@@ -2179,6 +2411,7 @@ export function saveCurrentPreset(){
         return
     }
     const savedPreset:botPreset =  {
+        id: pres[db.botPresetsId]?.id || uuidv4(),
         name: pres[db.botPresetsId].name,
         apiType: db.apiType,
         openAIKey: db.openAIKey,
@@ -2248,8 +2481,8 @@ export function saveCurrentPreset(){
         thinkingType: db.thinkingType ?? 'budget',
         adaptiveThinkingEffort: db.adaptiveThinkingEffort ?? 'high',
         outputImageModal: db.outputImageModal ?? false,
-        seperateModelsForAxModels: db.doNotChangeSeperateModels ? false : db.seperateModelsForAxModels ?? false,
-        seperateModels: db.doNotChangeSeperateModels ? null : safeStructuredClone(db.seperateModels),
+        seperateModelsForAxModels: false,
+        seperateModels: null,
         modelTools: safeStructuredClone(db.modelTools),
         fallbackModels: safeStructuredClone(db.fallbackModels),
         fallbackWhenBlankResponse: db.fallbackWhenBlankResponse ?? false,
@@ -2275,6 +2508,7 @@ export function copyPreset(id:number){
     let db = getDatabase()
     let pres = db.botPresets
     const newPres = safeStructuredClone(pres[id])
+    newPres.id = uuidv4()
     newPres.name += " Copy"
     db.botPresets.push(newPres)
 }
@@ -2374,15 +2608,9 @@ export function setPreset(db:Database, newPres: botPreset){
     db.thinkingType = newPres.thinkingType ?? 'budget'
     db.adaptiveThinkingEffort = newPres.adaptiveThinkingEffort ?? 'high'
     db.outputImageModal = newPres.outputImageModal ?? false
-    if(!db.doNotChangeSeperateModels){
-        db.seperateModelsForAxModels = newPres.seperateModelsForAxModels ?? false
-        db.seperateModels = safeStructuredClone(newPres.seperateModels) ?? {
-            memory: '',
-            emotion: '',
-            translate: '',
-            otherAx: ''
-        }
-    }
+    // Model config (separated aux models) is decoupled from prompt presets in v6:
+    // switching a prompt preset no longer overwrites db.seperateModels. The global
+    // db.seperateModels is the single source of truth (preset copies are inert).
     if(!db.doNotChangeFallbackModels){
         db.fallbackModels = safeStructuredClone(newPres.fallbackModels) ?? {
             memory: [],
@@ -2419,10 +2647,10 @@ export function saveCurrentThemePreset(){
     let pres = db.themePresets
     const saved: themePreset = {
         name: pres[db.themePresetsId]?.name ?? "Default",
-        theme: db.theme,
+        theme: normalizeTheme(db.theme),
+        nodeOnlyStandardChatWidth: db.nodeOnlyStandardChatWidth,
         guiHTML: db.guiHTML,
         customCSS: db.customCSS,
-        customGUI: db.customGUI,
         waifuWidth: db.waifuWidth,
         waifuWidth2: db.waifuWidth2,
         colorSchemeName: db.colorSchemeName,
@@ -2448,8 +2676,6 @@ export function saveCurrentThemePreset(){
         hideMessagePageCount: db.hideMessagePageCount,
         showFolderName: db.showFolderName,
         customBackground: db.customBackground,
-        playMessage: db.playMessage,
-        playMessageOnTranslateEnd: db.playMessageOnTranslateEnd,
         roundIcons: db.roundIcons,
         textScreenColor: db.textScreenColor,
         textBorder: db.textBorder,
@@ -2467,7 +2693,6 @@ export function saveCurrentThemePreset(){
         customQuotesData: db.customQuotesData ? [...db.customQuotesData] as [string,string,string,string] : ['"','"','\u2018','\u2019'],
         betaMobileGUI: db.betaMobileGUI,
         menuSideBar: db.menuSideBar,
-        notification: db.notification,
         useChatSticker: db.useChatSticker,
     }
     if(!Array.isArray(pres)){
@@ -2490,10 +2715,10 @@ export function changeToThemePreset(id = 0, savecurrent = true){
     const p = pres[id]
     if(!p) return
     db.themePresetsId = id
-    db.theme = p.theme ?? db.theme
+    db.theme = normalizeTheme(p.theme ?? db.theme)
+    db.nodeOnlyStandardChatWidth = p.nodeOnlyStandardChatWidth ?? db.nodeOnlyStandardChatWidth
     db.guiHTML = p.guiHTML ?? db.guiHTML
     db.customCSS = p.customCSS ?? db.customCSS
-    db.customGUI = p.customGUI ?? db.customGUI
     db.waifuWidth = p.waifuWidth ?? db.waifuWidth
     db.waifuWidth2 = p.waifuWidth2 ?? db.waifuWidth2
     db.colorSchemeName = p.colorSchemeName ?? db.colorSchemeName
@@ -2519,8 +2744,6 @@ export function changeToThemePreset(id = 0, savecurrent = true){
     db.hideAllImages = p.hideAllImages ?? db.hideAllImages
     db.showFolderName = p.showFolderName ?? db.showFolderName
     db.customBackground = p.customBackground ?? db.customBackground
-    db.playMessage = p.playMessage ?? db.playMessage
-    db.playMessageOnTranslateEnd = p.playMessageOnTranslateEnd ?? db.playMessageOnTranslateEnd
     db.roundIcons = p.roundIcons ?? db.roundIcons
     db.textScreenColor = p.textScreenColor
     db.textBorder = p.textBorder
@@ -2538,7 +2761,6 @@ export function changeToThemePreset(id = 0, savecurrent = true){
     db.customQuotesData = p.customQuotesData ? [...p.customQuotesData] as [string,string,string,string] : db.customQuotesData
     db.betaMobileGUI = p.betaMobileGUI ?? db.betaMobileGUI
     db.menuSideBar = p.menuSideBar ?? db.menuSideBar
-    db.notification = p.notification ?? db.notification
     db.useChatSticker = p.useChatSticker ?? db.useChatSticker
 }
 
@@ -2571,7 +2793,7 @@ export async function downloadThemePreset(id: number, type: 'json'|'risutheme' =
         downloadFile(pres.name + "_theme.risutheme", buf2)
     }
 
-    alertNormal(language.successExport)
+    notifySuccess(language.successExport)
 }
 
 export async function importThemePreset(f: {
@@ -2604,8 +2826,9 @@ export async function importThemePreset(f: {
 
     let db = getDatabase()
     pre.name = pre.name ?? "Imported Theme"
+    pre.theme = normalizeTheme(pre.theme)
     db.themePresets.push(pre)
-    alertNormal(language.successImport)
+    notifySuccess(language.successImport)
 }
 
 import { encode as encodeMsgpack, decode as decodeMsgpack } from "msgpackr/index-no-eval";
@@ -2619,7 +2842,6 @@ import type { HypaModel } from '../process/memory/hypamemory';
 import type { SerializableHypaV3Data } from '../process/memory/hypav3';
 import { defaultHotkeys, type Hotkey } from '../defaulthotkeys';
 import type { OpenAIChat } from '../process/index.svelte';
-import type { Loadout } from '../loadout';
 
 export async function downloadPreset(id:number, type:'json'|'risupreset'|'return' = 'json'){
     saveCurrentPreset()
@@ -2660,7 +2882,7 @@ export async function downloadPreset(id:number, type:'json'|'risupreset'|'return
 
     }
 
-    alertNormal(language.successExport)
+    notifySuccess(language.successExport)
 
 
     return {
@@ -2717,6 +2939,7 @@ export async function importPreset(f:{
         pr.NAISettings.mirostat_lr = pre.parameters.mirostat_lr
         pr.NAISettings.mirostat_tau = pre.parameters.mirostat_tau
         pr.name = pre.name ?? "Imported"
+        pr.id = uuidv4()
         db.botPresets.push(pr)
         return
     }
@@ -2822,10 +3045,12 @@ export async function importPreset(f:{
             })
         }
         pr.name = "Imported ST Preset"
+        pr.id = uuidv4()
         db.botPresets.push(pr)
         return
     }
     pre.name ??= "Imported"
+    pre.id = uuidv4()
     if(!Array.isArray(db.botPresets)){
         db.botPresets = []
     }

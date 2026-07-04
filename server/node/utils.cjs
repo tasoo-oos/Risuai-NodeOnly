@@ -1,5 +1,7 @@
 const { Packr, Unpackr, decode } = require('msgpackr');
 const fflate = require('fflate');
+const { randomUUID } = require('crypto');
+const { logger } = require('./logs.cjs');
 
 // Magic headers for different save formats
 const magicHeader = new Uint8Array([0, 82, 73, 83, 85, 83, 65, 86, 69, 0, 7]);
@@ -33,8 +35,29 @@ const unpackr = new Unpackr({
     useRecords: false
 });
 
+/**
+ * Ensure every bot preset in a decoded database has a stable string id.
+ * Mirrors the client-side setDatabase() migration so that any code path
+ * which decodes a .bin and uses the result directly (without going through
+ * the client's setDatabase) still sees id-populated presets. Idempotent.
+ * @param {*} db - decoded database object (may be partial/legacy)
+ * @returns {*} the same db, mutated in place
+ */
+function ensureBotPresetIds(db) {
+    if (db && Array.isArray(db.botPresets)) {
+        for (const preset of db.botPresets) {
+            if (preset && !preset.id) {
+                preset.id = randomUUID();
+            }
+        }
+    }
+    return db;
+}
+
 // Preset template for bot presets — must match client-side presetTemplate in database.svelte.ts
+// `id` is filled in by createBotPresetTemplate() so each preset gets a fresh UUID.
 const presetTemplate = {
+    id: '',
     name: "New Preset",
     apiType: "gemini-3-flash-preview",
     openAIKey: "",
@@ -183,7 +206,14 @@ class RisuSaveDecoder {
         this.blocks = [];
     }
 
-    async decode(data) {
+    async decode(data, options = {}) {
+        // `resolveRemote(name)` is an optional async function that returns the
+        // raw bytes (Uint8Array | Buffer | null) for a remote block file, e.g.
+        // `kvGet('remotes/<name>.local.bin')`. When omitted, REMOTE blocks are
+        // skipped (the historical behavior) — which loses any characters that
+        // were saved as remote blocks by upstream RisuAI or by an earlier
+        // NodeOnly version.
+        const { resolveRemote = null } = options;
         let offset = magicRisuSaveHeader.length;
         let db = {};
 
@@ -228,7 +258,12 @@ class RisuSaveDecoder {
             }
         }
 
-        for (const key in this.blocks) {
+        // Numeric for loop — REMOTE resolution pushes new blocks into
+        // this.blocks during iteration, and `for…in` semantics on a mutated
+        // array are implementation-defined. The client decoder already uses
+        // a numeric loop for the same reason.
+        for (let i = 0; i < this.blocks.length; i++) {
+            const key = i;
             try {
                 switch (this.blocks[key].type) {
                     case RisuSaveType.ROOT: {
@@ -273,8 +308,25 @@ class RisuSaveDecoder {
                         break;
                     }
                     case RisuSaveType.REMOTE: {
-                        // On the server side, remote blocks reference local files.
-                        // We cannot resolve them here, so skip.
+                        // REMOTE blocks point to a separate KV entry
+                        // (`remotes/<name>.local.bin`). Without a resolver
+                        // callback we have to skip — the historical behavior
+                        // that drops characters saved by upstream RisuAI.
+                        if (!resolveRemote) break;
+                        const remoteInfo = JSON.parse(this.blocks[key].content);
+                        const resolved = await resolveRemote(remoteInfo.name);
+                        if (!resolved) {
+                            logger.warn(`[RisuSaveDecoder] Remote block ${remoteInfo.name} could not be resolved`);
+                            break;
+                        }
+                        // Push the resolved block back into the queue so it
+                        // gets processed by a later iteration of this loop.
+                        this.blocks.push({
+                            name: remoteInfo.name,
+                            type: remoteInfo.type,
+                            compression: false,
+                            content: new TextDecoder().decode(resolved),
+                        });
                         break;
                     }
                     default: {
@@ -282,7 +334,7 @@ class RisuSaveDecoder {
                     }
                 }
             } catch (error) {
-                console.error(`[RisuSaveDecoder] Error processing block ${this.blocks[key].name}:`, error);
+                logger.error(`[RisuSaveDecoder] Error processing block ${this.blocks[key].name}:`, error);
                 if (this.blocks[key].type === RisuSaveType.ROOT) {
                     throw new Error('Failed to decode root block, cannot proceed with decoding RisuSave data');
                 }
@@ -293,9 +345,13 @@ class RisuSaveDecoder {
         }
         // Fix botpreset bugs
         if (!Array.isArray(db.botPresets) || db.botPresets.length === 0) {
-            db.botPresets = [presetTemplate];
+            db.botPresets = [{ ...presetTemplate, id: randomUUID() }];
             db.botPresetsId = 0;
         }
+        // Outer decodeRisuSave also normalizes ids across every decode path
+        // (raw/compressed/stream/risusave) — calling it here too keeps the
+        // invariant locally true even if a caller constructs a decoder by hand.
+        ensureBotPresetIds(db);
 
         return db;
     }
@@ -304,9 +360,21 @@ class RisuSaveDecoder {
 /**
  * Decode RisuSave data
  * @param {Uint8Array} data - The data to decode
+ * @param {Object} [options] - Decode options
+ * @param {(name: string) => Promise<Uint8Array|Buffer|null>} [options.resolveRemote] -
+ *   Resolver for REMOTE blocks. Only relevant for the "risusave" format; ignored
+ *   for legacy/compressed/stream which never contain REMOTE blocks.
  * @returns {Promise<Object>} - The decoded database
  */
-async function decodeRisuSave(data) {
+async function decodeRisuSave(data, options = {}) {
+    // Decode through the internal implementation, then normalize botPreset ids
+    // exactly once at the boundary so every header type (raw/compressed/stream/
+    // risusave) and the catch-fallback paths all guarantee id-populated presets.
+    const result = await _decodeRisuSaveInternal(data, options);
+    return ensureBotPresetIds(result);
+}
+
+async function _decodeRisuSaveInternal(data, options = {}) {
     try {
         const header = checkHeader(data);
         switch (header) {
@@ -328,12 +396,12 @@ async function decodeRisuSave(data) {
             }
             case "risusave": {
                 const decoder = new RisuSaveDecoder();
-                return await decoder.decode(data);
+                return await decoder.decode(data, options);
             }
         }
         return unpackr.decode(data);
     } catch (error) {
-        console.error('Error decoding RisuSave data:', error);
+        logger.error('Error decoding RisuSave data:', error);
         try {
             const risuSaveHeader = new Uint8Array(Buffer.from("\u0000\u0000RISU", 'utf-8'));
             const realData = data.subarray(risuSaveHeader.length);
@@ -348,6 +416,35 @@ async function decodeRisuSave(data) {
             }
         }
     }
+}
+
+/**
+ * Cheap scan: does this buffer contain any REMOTE blocks?
+ * Walks block headers without parsing block content, so it's safe to call on
+ * very large RisuSave buffers. Returns false for any non-"risusave" format.
+ * @param {Uint8Array|Buffer} data
+ * @returns {boolean}
+ */
+function hasRemoteBlocks(data) {
+    if (!data || data.length < magicRisuSaveHeader.length) return false;
+    if (checkHeader(data) !== 'risusave') return false;
+
+    let offset = magicRisuSaveHeader.length;
+    while (offset + 7 <= data.length) {
+        const type = data[offset];
+        // [type:u8][compression:u8][nameLength:u8][name][length:u32LE][data]
+        const nameLength = data[offset + 2];
+        const lengthOffset = offset + 3 + nameLength;
+        if (lengthOffset + 4 > data.length) break;
+        const blockLength =
+            data[lengthOffset] |
+            (data[lengthOffset + 1] << 8) |
+            (data[lengthOffset + 2] << 16) |
+            (data[lengthOffset + 3] << 24);
+        if (type === RisuSaveType.REMOTE) return true;
+        offset = lengthOffset + 4 + (blockLength >>> 0);
+    }
+    return false;
 }
 
 /**
@@ -481,6 +578,7 @@ module.exports = {
     normalizeJSON,
     checkHeader,
     checkCompressionStreams,
+    hasRemoteBlocks,
 
     // Constants
     RisuSaveType,

@@ -1,8 +1,7 @@
 <script lang="ts">
-    import { ArrowLeft, ArrowLeftRightIcon, ArrowRight, BookmarkIcon, BotIcon, CopyIcon, PowerOff, GitBranch, HamburgerIcon, LanguagesIcon, MenuIcon, PencilIcon, RefreshCcwIcon, SplitIcon, TrashIcon, UserIcon, Volume2Icon, Scissors } from "@lucide/svelte"
+    import { ArrowLeft, ArrowLeftRightIcon, ArrowRight, BookmarkIcon, BotIcon, CopyIcon, PowerOff, GitBranch, HamburgerIcon, LanguagesIcon, MenuIcon, PencilIcon, RefreshCcwIcon, SplitIcon, TrashIcon, UserIcon, Volume2Icon, Scissors, EyeOff } from "@lucide/svelte"
     import { aiLawApplies, changeChatTo, foldChatToMessage, getFileSrc, createChatCopyName } from "src/ts/globalApi.svelte"
     import { ColorSchemeTypeStore } from "src/ts/gui/colorscheme"
-    import { longpress } from "src/ts/gui/longtouch"
     import { getModelInfo } from "src/ts/model/modellist"
     import { runLuaButtonTrigger } from 'src/ts/process/scriptings'
     import { risuChatParser } from "src/ts/process/scripts"
@@ -15,7 +14,7 @@
     import { type Unsubscriber } from "svelte/store"
     import { v4 as uuidv4, v4 } from 'uuid'
     import { language } from "../../lang"
-    import { alertClear, alertConfirm, alertInput, alertNormal, alertRequestData, alertWait } from "../../ts/alert"
+    import { alertClear, alertConfirm, alertConfirmMulti, alertInput, alertRequestData, alertWait, notifyInfo, notifySuccess, type AlertAction } from "../../ts/alert"
     import { ParseMarkdown, type CbsConditions, type simpleCharacterArgument } from "../../ts/parser/parser.svelte"
     import { getLLMCache, setLLMCache } from "../../ts/translator/translator"
     import { getCurrentCharacter, getCurrentChat, setCurrentChat, type MessageGenerationInfo } from "../../ts/storage/database.svelte"
@@ -85,33 +84,31 @@
     let translated = $state(false)
     let partialEditEnabled = $state(true)
 
-    async function rm(e:MouseEvent, rec?:boolean){
-        if(e.shiftKey){
-            let msg = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message
-            msg = msg.slice(0, idx)
-            DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message = msg
-            return
-        }
+    async function rm(){
+        const messages = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message
+        const cascadeCount = messages.length - idx
 
-        const rm = DBState.db.askRemoval ? await alertConfirm(language.removeChat) : true
-        if(rm){
-            if(DBState.db.instantRemove || rec){
-                const r = await alertConfirm(language.instantRemoveConfirm)
-                let msg = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message
-                if(!r){
-                    msg = msg.slice(0, idx)
-                }
-                else{
-                    msg.splice(idx, 1)
-                }
-                DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message = msg
-            }
-            else{
-                let msg = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message
-                msg.splice(idx, 1)
-                DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message = msg
-            }
+        const actions: AlertAction[] = [
+            { label: language.removeMessageOnly, variant: 'destructive' },
+        ]
+        if(cascadeCount > 1){
+            actions.push({
+                label: language.removeMessageAndAfter.replace('{}', cascadeCount.toString()),
+                variant: 'destructive',
+            })
         }
+        const sel = await alertConfirmMulti(language.removeChat, actions)
+        if(sel < 0) return
+        let msg = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message
+        if(sel === 1){
+            msg = msg.slice(0, idx)
+            notifySuccess(language.messagesRemoved.replace('{}', cascadeCount.toString()))
+        }
+        else{
+            msg.splice(idx, 1)
+            notifySuccess(language.messageRemoved)
+        }
+        DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message = msg
     }
 
     async function edit(){
@@ -125,7 +122,11 @@
     function handlePartialEditSave(e: CustomEvent<{ newData: string }>) {
         if (idx >= 0) {
             message = e.detail.newData
-            DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].data = e.detail.newData
+            const msg = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
+            msg.data = e.detail.newData
+            if (msg.swipes && msg.swipeId !== undefined) {
+                msg.swipes[msg.swipeId] = e.detail.newData
+            }
             displaya(e.detail.newData)
         }
     }
@@ -451,9 +452,9 @@
     <div class="grow flex items-center justify-end" class:text-textcolor2={options?.applyTextColors !== false}>
         {#if isComment}
             <button
-                class="flex items-center hover:text-blue-500 transition-colors button-icon-remove"
-                onclick={async (e) => {
-                    await rm(e, true)
+                class="flex items-center hover:text-red-400 transition-colors button-icon-remove"
+                onclick={async () => {
+                    await rm()
                 }}
             >
                 <TrashIcon size={20} />
@@ -465,13 +466,13 @@
                 {@render translationButton()}
                 {#if window.innerWidth >= 640}
                     {@render majorIconButtonsBody(false)}
-                    {#if DBState.db.characters[selIdState.selId]}
+                    {#if DBState.db.characters[selIdState.selId] && idx > -1}
                         <PopupButton>
                             {@render minorIconButtonsBody(true)}
                         </PopupButton>
                     {/if}
                 {:else}
-                    {#if DBState.db.characters[selIdState.selId]}
+                    {#if DBState.db.characters[selIdState.selId] && idx > -1}
                         <PopupButton>
                             {@render majorIconButtonsBody(true)}
                             {@render minorIconButtonsBody(true)}
@@ -479,6 +480,19 @@
                     {:else}
                         {@render majorIconButtonsBody(false)}
                     {/if}
+                {/if}
+                {#if firstMessage}
+                    <button class={"flex items-center shrink-0 transition-colors " + (disabled === true ? 'text-red-500 hover:text-red-400' : 'hover:text-primary')} onclick={async () => {
+                        await sleep(1)
+                        const chat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage]
+                        if(chat.firstMessageDisabled){
+                            chat.firstMessageDisabled = false
+                        } else if(await alertConfirm(language.disableFirstMessageConfirm)){
+                            chat.firstMessageDisabled = true
+                        }
+                    }}>
+                        <EyeOff size={20}/>
+                    </button>
                 {/if}
                 <div class="flex items-center gap-1">
                     {@render rerolls()}
@@ -490,8 +504,8 @@
 
 
 {#snippet majorIconButtonsBody(showNames:boolean)}
-    {#if DBState.db.useChatCopy && !blankMessage}
-    <button class="flex items-center hover:text-blue-500 transition-colors button-icon-copy" onclick={async ()=>{
+    {#if !blankMessage}
+    <button class="flex items-center hover:text-primary transition-colors button-icon-copy" onclick={async ()=>{
         if(window.navigator.clipboard.write){
             try {
                 alertWait(language.loading)
@@ -532,7 +546,7 @@
                 
                 const imgs = doc.querySelectorAll('img')
                 for(const img of imgs){
-                    img.setAttribute('alt', 'from Risuai')
+                    img.setAttribute('alt', 'from PocketRisu')
                     const url = img.getAttribute('src')
                     
                     img.setAttribute('style', `
@@ -689,7 +703,7 @@
     ${doc.body.innerHTML}
 </div>
 <div style="text-align: center; margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid ${root.style.getPropertyValue('--risu-theme-darkborderc')};">
-    <span style="font-size: 0.75rem; color: ${root.style.getPropertyValue('--risu-theme-textcolor2')}; opacity: 0.7;">From Risuai</span>
+    <span style="font-size: 0.75rem; color: ${root.style.getPropertyValue('--risu-theme-textcolor2')}; opacity: 0.7;">From PocketRisu</span>
 </div>
 </div>
 </div>`
@@ -700,7 +714,7 @@
                         'text/html': new Blob([html], {type: 'text/html'})
                     })
                 ])
-                alertNormal(language.copied)
+                notifyInfo(language.copied)
                 return
             }
             catch (e) {
@@ -722,7 +736,7 @@
 {/if}
 {#if idx > -1}
     {#if DBState.db.characters[selIdState.selId].ttsMode !== 'none' && (DBState.db.characters[selIdState.selId].ttsMode)}
-        <button class="flex items-center hover:text-blue-500 transition-colors button-icon-tts" onclick={()=>{
+        <button class="flex items-center hover:text-primary transition-colors button-icon-tts" onclick={()=>{
             return sayTTS(null, message)
         }}>
             <Volume2Icon size={20}/>
@@ -731,7 +745,7 @@
             {/if}
         </button>
     {/if}
-    <button class="flex items-center hover:text-blue-500 transition-colors button-icon-remove" onclick={(e) => rm(e, false)} use:longpress={(e) => rm(e, true)}>
+    <button class="flex items-center hover:text-red-400 transition-colors button-icon-remove" onclick={rm}>
         <TrashIcon size={20}/>
 
         {#if showNames}
@@ -743,7 +757,7 @@
 
 {#snippet translationButton(showNames = false)}
     {#if DBState.db.translator !== '' && !blankMessage}
-        <button class={"flex items-center cursor-pointer hover:text-blue-500 transition-colors button-icon-translate " + (translated ? 'text-blue-400':'')} class:translating={translating} onclick={async () => {
+        <button class={"flex items-center cursor-pointer hover:text-primary transition-colors button-icon-translate " + (translated ? 'text-blue-400':'')} class:translating={translating} onclick={async () => {
             translated = !translated
         }}>
             <LanguagesIcon />
@@ -753,7 +767,7 @@
         </button>
     {/if}
     {#if idx > -1}
-        <button class={"flex items-center hover:text-blue-500 transition-colors button-icon-edit "+(editMode?'text-blue-400':'')} onclick={() => {
+        <button class={"flex items-center hover:text-primary transition-colors button-icon-edit "+(editMode?'text-blue-400':'')} onclick={() => {
             if(!editMode){
                 editMode = true
             }
@@ -775,20 +789,20 @@
     {#if (rerollIcon || altGreeting) && role !== 'user'}
         {#if altGreeting}
             <!-- First message: ← counter → -->
-            <button class="flex items-center shrink-0 hover:text-blue-500 transition-colors button-icon-unreroll" onclick={unReroll}>
+            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-unreroll" onclick={unReroll}>
                 <ArrowLeft size={22}/>
             </button>
             {#if !DBState.db.hideMessagePageCount}
                 <span class="flex items-center text-xs text-textcolor2 shrink overflow-hidden whitespace-nowrap min-w-0">{currentPage}/{totalPages}</span>
             {/if}
-            <button class="flex items-center shrink-0 hover:text-blue-500 transition-colors button-icon-reroll" onclick={onReroll}>
+            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" onclick={onReroll}>
                 <ArrowRight size={22}/>
             </button>
         {:else}
             <!-- Normal messages: ← counter → ↻ -->
-            <button class="flex items-center shrink-0 hover:text-blue-500 transition-colors button-icon-unreroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
+            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-unreroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
                 if (totalPages <= 1) {
-                    if (await alertConfirm(language.noSwipesRerollConfirm)) onReroll()
+                    if (!DBState.db.confirmReroll || await alertConfirm(language.noSwipesRerollConfirm)) onReroll()
                 } else {
                     unReroll()
                 }
@@ -798,17 +812,17 @@
             {#if !DBState.db.hideMessagePageCount}
                 <span class="flex items-center text-xs text-textcolor2 shrink overflow-hidden whitespace-nowrap min-w-0" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'}>{currentPage}/{totalPages}</span>
             {/if}
-            <button class="flex items-center shrink-0 hover:text-blue-500 transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
+            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
                 if (totalPages <= 1) {
-                    if (await alertConfirm(language.noSwipesRerollConfirm)) onReroll()
+                    if (!DBState.db.confirmReroll || await alertConfirm(language.noSwipesRerollConfirm)) onReroll()
                 } else {
                     onNextSwipe()
                 }
             }}>
                 <ArrowRight size={22}/>
             </button>
-            <button class="flex items-center shrink-0 hover:text-blue-500 transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
-                if (await alertConfirm(language.rerollConfirm)) onReroll()
+            <button class="flex items-center shrink-0 hover:text-primary transition-colors button-icon-reroll" class:dyna-icon={rerollIcon === 'dynamic' || rerollIcon === 'force'} class:force-show={rerollIcon === 'force'} onclick={async () => {
+                if (!DBState.db.confirmReroll || await alertConfirm(language.rerollConfirm)) onReroll()
             }}>
                 <RefreshCcwIcon size={20}/>
             </button>
@@ -817,9 +831,9 @@
 {/snippet}
 
 {#snippet minorIconButtonsBody(showNames:boolean)}
-    
+    {#if idx > -1}
     {#if DBState.db.enableBookmark}
-        <button class="flex items-center hover:text-blue-500 transition-colors button-icon-bookmark {isBookmarked ? 'text-yellow-400' : ''}" onclick={async () => {
+        <button class="flex items-center hover:text-primary transition-colors button-icon-bookmark {isBookmarked ? 'text-yellow-400' : ''}" onclick={async () => {
             await sleep(1)
             toggleBookmark()
         }}>
@@ -844,7 +858,7 @@
         </button>
     {/if}
 
-    <button class="flex items-center hover:text-blue-500 transition-colors" onclick={async () => {
+    <button class="flex items-center hover:text-primary transition-colors" onclick={async () => {
         await sleep(1)
         const currentChat = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage]
 
@@ -881,7 +895,7 @@
         {/if}
     </button>
 
-    <button class="flex items-center hover:text-blue-500 transition-colors" onclick={async () => {
+    <button class="flex items-center hover:text-primary transition-colors" onclick={async () => {
         await sleep(1)
         const currentMessage = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].disabled = !currentMessage.disabled
@@ -892,7 +906,7 @@
         {/if}
     </button>
 
-    <button class="flex items-center hover:text-blue-500 transition-colors" onclick={async () => {
+    <button class="flex items-center hover:text-primary transition-colors" onclick={async () => {
         await sleep(1)
         const currentMessage = DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx]
         DBState.db.characters[selIdState.selId].chats[DBState.db.characters[selIdState.selId].chatPage].message[idx].disabled = currentMessage.disabled === 'allBefore' ? false : 'allBefore'
@@ -902,6 +916,7 @@
             <span class="ml-1">{language.disableAbove}</span>
         {/if}
     </button>
+    {/if}
 {/snippet}
 
 {#snippet senderIcon(options:{rounded?:boolean,styleFix?:string} = {})}
@@ -1085,7 +1100,11 @@
      onclickcapture={handleButtonTriggerWithin}>
     <div class="text-textcolor grow max-w-full sm:px-4 py-4">
         {#if !blankMessage}
-            <div class="flex flex-col w-full min-w-0 max-w-3xl mx-auto py-6 px-4 sm:px-8 bg-bgcolor sm:rounded-lg">
+            {@const nodeOnlyWidthClass =
+                DBState.db.nodeOnlyStandardChatWidth === 'full' ? 'max-w-full' :
+                DBState.db.nodeOnlyStandardChatWidth === 'wide' ? 'max-w-6xl' :
+                'max-w-3xl'}
+            <div class="flex flex-col w-full min-w-0 {nodeOnlyWidthClass} mx-auto py-6 px-4 sm:px-8 bg-bgcolor sm:rounded-lg">
                 <!-- Header: icon + name -->
                 <div class="flex items-center gap-3 mb-4">
                     {@render senderIcon({rounded: DBState.db.roundIcons})}

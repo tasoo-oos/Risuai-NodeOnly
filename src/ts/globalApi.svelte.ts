@@ -2,24 +2,26 @@ import { changeFullscreen, checkNullish, sleep } from "./util"
 import { v4 as uuidv4, v4 } from 'uuid';
 import { tick } from "svelte";
 import { get } from "svelte/store";
+import streamSaver from 'streamsaver';
 import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
 import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, loadingOverlayStore, chatDeselected } from "./stores.svelte";
 import { loadPlugins } from "./plugins/plugins.svelte";
-import { alertConfirm, alertError, alertMd, alertNormal, alertNormalWait, alertSelect, alertTOS, waitAlert } from "./alert";
+import { alertConfirm, alertError, alertMd, alertNormalWait, alertSelect, alertTOS, waitAlert, notifySuccess, notifyError } from "./alert";
 import { hasher } from "./parser/parser.svelte";
 import { characterURLImport, hubURL } from "./characterCards";
 import { defaultJailbreak, defaultMainPrompt, oldJailbreak, oldMainPrompt } from "./storage/defaultPrompts";
-import { decodeRisuSave, encodeRisuSaveLegacy, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
-import { isHydrating, saveChatToServer, ensureChatHydrated } from "./storage/chatStorage";
+import { decodeRisuSave, encodeRisuSaveLegacy, findDangerousChatOps, RisuSaveEncoder, RisuSavePatcher, type toSaveType } from "./storage/risuSave";
+import { isHydrating, saveChatToServer, ensureChatHydrated, chatToStub, classifyChat } from "./storage/chatStorage";
 import { AutoStorage } from "./storage/autoStorage";
-import { ConflictError } from "./storage/nodeStorage";
+import { ConflictError, type PersistWarning } from "./storage/nodeStorage";
 import { supportsPatchSync } from "./platform";
 import { updateAnimationSpeed } from "./gui/animation";
 import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { language } from "src/lang";
 import { startObserveDom } from "./observer.svelte";
 import { updateGuisize } from "./gui/guisize";
+import { deepTouch } from "./gui/deepTouch.svelte";
 import { updateLorebooks } from "./characters";
 import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
@@ -251,6 +253,107 @@ let requestImmediateSaveImpl: ((options?: {
 }) => Promise<void> | void) = () => {}
 let patchSyncBaseline: Database | null = null
 
+// Surfaces server-side persist failures (Stage 1 visibility — see issues.md).
+// The same failure is re-attached on every patch response until cleared, so we
+// dedupe by timestamp to fire one toast per distinct failure event.
+let lastShownPersistWarningTs = 0
+
+function showPersistWarningOnce(warning: PersistWarning) {
+    if (warning.timestamp <= lastShownPersistWarningTs) return
+    lastShownPersistWarningTs = warning.timestamp
+
+    // Stub-flag-loss is the chat-data corruption guard firing at the disk
+    // boundary — this means the persist was REFUSED, not that the save was
+    // safely re-routed. Show the dedicated "save aborted" toast so the user
+    // knows their latest changes may not be on disk yet.
+    if (warning.source && warning.source.includes('stub-flag-loss')) {
+        showChatGuardPersistAbortToast()
+        return
+    }
+
+    const sizeStr = warning.attemptedSize != null
+        ? ` (${language.errors.persistFailureAttemptedSize} ${(warning.attemptedSize / 1024 / 1024 / 1024).toFixed(2)}GB)`
+        : ''
+    notifyError(`${language.errors.persistFailureTitle}${sizeStr}`, {
+        description: warning.message,
+        source: 'persist-failure',
+    })
+}
+
+// Throttle the client/server-PATCH chat-guard toast — the underlying root
+// cause may keep firing every 5s save cycle, and we don't want to spam the
+// user. One toast per 5-minute window is enough to surface the situation.
+// Guards 2/3 fall through to a safe full-write so the data IS persisted —
+// the toast is informational, not actionable.
+const CHAT_GUARD_TOAST_INTERVAL_MS = 5 * 60 * 1000
+let lastChatGuardToastTs = 0
+
+function showChatGuardToastThrottled(source: 'client' | 'server') {
+    const now = Date.now()
+    if (now - lastChatGuardToastTs < CHAT_GUARD_TOAST_INTERVAL_MS) return
+    lastChatGuardToastTs = now
+    notifyError(language.errors.chatGuardTitle, {
+        description: `${language.errors.chatGuardDesc} [${source}]`,
+        source: 'chat-guard',
+    })
+}
+
+// Persist-side guard (guard 1) refuses the disk write outright — there is no
+// fallback path that recovers this cycle's changes automatically. Use a
+// shorter throttle (30s) since this is more severe and actionable: the user
+// should be aware before refreshing that their latest changes might not be
+// persisted. Each separate persist-failure timestamp on the server gates this
+// path via showPersistWarningOnce, so a single corruption won't repeat-toast.
+const CHAT_GUARD_PERSIST_TOAST_INTERVAL_MS = 30 * 1000
+let lastChatGuardPersistToastTs = 0
+
+// Verbose chat-guard dump is gated behind a localStorage flag so chronic
+// root-cause environments (e.g. a still-corrupt v1.4.x install) don't flood
+// the console every 5-second save cycle. Toggle with:
+//   localStorage.setItem('risu-chat-guard-debug', '1')
+const CHAT_GUARD_DEBUG_KEY = 'risu-chat-guard-debug'
+function isChatGuardDebugEnabled(): boolean {
+    try {
+        return typeof localStorage !== 'undefined' && localStorage.getItem(CHAT_GUARD_DEBUG_KEY) === '1'
+    } catch {
+        return false
+    }
+}
+
+function showChatGuardPersistAbortToast() {
+    const now = Date.now()
+    if (now - lastChatGuardPersistToastTs < CHAT_GUARD_PERSIST_TOAST_INTERVAL_MS) return
+    lastChatGuardPersistToastTs = now
+    notifyError(language.errors.chatGuardPersistTitle, {
+        description: language.errors.chatGuardPersistDesc,
+        source: 'chat-guard-persist',
+    })
+}
+
+// Dev-only preview helpers — bypass throttling so the dev panel always shows
+// the toast immediately. Mirror the production helpers above so any wording
+// or source-tag tweak shows up in the preview without extra synchronization.
+export function previewChatGuardToast(variant: 'client' | 'server' | 'server-persist') {
+    if (variant === 'server-persist') {
+        notifyError(language.errors.chatGuardPersistTitle, {
+            description: language.errors.chatGuardPersistDesc,
+            source: 'chat-guard-persist',
+        })
+        return
+    }
+    notifyError(language.errors.chatGuardTitle, {
+        description: `${language.errors.chatGuardDesc} [${variant}]`,
+        source: 'chat-guard',
+    })
+}
+
+export function previewPersistFailureToast() {
+    notifyError(`${language.errors.persistFailureTitle} (${language.errors.persistFailureAttemptedSize} 2.10GB)`, {
+        description: 'preview: simulated kvSet failure (BLOB size > INT_MAX)',
+        source: 'persist-failure',
+    })
+}
+
 export function requestImmediateSave(options?: {
     forceFullWrite?: boolean
 }) {
@@ -308,7 +411,6 @@ export async function saveDb() {
         root: false,
         botPreset: false,
         modules: false,
-        loadouts: false,
         plugins: false,
         pluginCustomStorage: false
     }
@@ -328,7 +430,6 @@ export async function saveDb() {
         return !!(
             toSave.botPreset ||
             toSave.modules ||
-            toSave.loadouts ||
             toSave.plugins ||
             toSave.pluginCustomStorage ||
             toSave.root ||
@@ -344,7 +445,6 @@ export async function saveDb() {
         changeTracker.root = false
         changeTracker.botPreset = false
         changeTracker.modules = false
-        changeTracker.loadouts = false
         changeTracker.plugins = false
         changeTracker.pluginCustomStorage = false
         return toSave
@@ -369,7 +469,6 @@ export async function saveDb() {
         let didInitRootEffect = false
         let didInitBotPresetEffect = false
         let didInitModulesEffect = false
-        let didInitLoadoutsEffect = false
         let didInitPluginsEffect = false
         let didInitPluginStorageEffect = false
         let didInitGeneralEffect = false
@@ -412,9 +511,9 @@ export async function saveDb() {
             for (const key in DBState.db) {
                 if (
                     key !== 'characters' && key !== 'botPresets' && key !== 'modules' &&
-                    key !== 'loadouts' && key !== 'plugins' && key !== 'pluginCustomStorage'
+                    key !== 'plugins' && key !== 'pluginCustomStorage'
                 ) {
-                    $state.snapshot(DBState.db[key])
+                    deepTouch(DBState.db[key])
                 }
             }
             if (!didInitRootEffect) {
@@ -426,8 +525,8 @@ export async function saveDb() {
         })
         $effect(() => {
             DBState.db.botPresetsId
-            try { $state.snapshot(DBState.db.botPresets) } catch (e) {
-                console.warn('[Save] $state.snapshot(botPresets) failed:', e)
+            try { deepTouch(DBState.db.botPresets) } catch (e) {
+                console.warn('[Save] deepTouch(botPresets) failed:', e)
                 return
             }
             if (!didInitBotPresetEffect) {
@@ -438,8 +537,8 @@ export async function saveDb() {
             saveTimeoutExecute()
         })
         $effect(() => {
-            try { $state.snapshot(DBState.db.modules) } catch (e) {
-                console.warn('[Save] $state.snapshot(modules) failed:', e)
+            try { deepTouch(DBState.db.modules) } catch (e) {
+                console.warn('[Save] deepTouch(modules) failed:', e)
                 return
             }
             if (!didInitModulesEffect) {
@@ -450,16 +549,7 @@ export async function saveDb() {
             saveTimeoutExecute()
         })
         $effect(() => {
-            $state.snapshot(DBState.db.loadouts)
-            if (!didInitLoadoutsEffect) {
-                didInitLoadoutsEffect = true
-                return
-            }
-            changeTracker.loadouts = true
-            saveTimeoutExecute()
-        })
-        $effect(() => {
-            $state.snapshot(DBState.db.plugins)
+            deepTouch(DBState.db.plugins)
             if (!didInitPluginsEffect) {
                 didInitPluginsEffect = true
                 return
@@ -468,7 +558,7 @@ export async function saveDb() {
             saveTimeoutExecute()
         })
         $effect(() => {
-            $state.snapshot(DBState.db.pluginCustomStorage)
+            deepTouch(DBState.db.pluginCustomStorage)
             if (!didInitPluginStorageEffect) {
                 didInitPluginStorageEffect = true
                 return
@@ -478,7 +568,7 @@ export async function saveDb() {
         })
         $effect(() => {
             const currentCharacterIds = (DBState?.db?.characters ?? []).map((character) => character?.chaId).filter(Boolean)
-            $state.snapshot(currentCharacterIds)
+            deepTouch(currentCharacterIds)
 
             const currentCharacterIdSet = new Set<string>(currentCharacterIds)
             for (const previousCharacterId of knownCharacterIds) {
@@ -492,11 +582,11 @@ export async function saveDb() {
                 for (const key in DBState.db.characters[selIdState]) {
                     // Exclude chats — chat changes are tracked via chat-specific server save, not database.bin
                     if (key !== 'chats') {
-                        $state.snapshot(DBState.db.characters[selIdState][key])
+                        deepTouch(DBState.db.characters[selIdState][key])
                     }
                 }
                 // Track stub metadata and chat ordering for database.bin persistence.
-                $state.snapshot(DBState.db.characters[selIdState].chats.map(c => ({
+                deepTouch(DBState.db.characters[selIdState].chats.map(c => ({
                     id: c.id,
                     name: c.name,
                     lastDate: c.lastDate,
@@ -518,7 +608,7 @@ export async function saveDb() {
             const activeChar = DBState?.db?.characters?.[selIdState]
             const activeChat = activeChar?.chats?.[activeChar?.chatPage]
             if (activeChat) {
-                $state.snapshot(activeChat)
+                deepTouch(activeChat)
             }
 
             const activeChaId = activeChar?.chaId ?? ''
@@ -563,7 +653,6 @@ export async function saveDb() {
         })
         changeTracker.botPreset = changeTracker.botPreset || toSave.botPreset
         changeTracker.modules = changeTracker.modules || toSave.modules
-        changeTracker.loadouts = changeTracker.loadouts || toSave.loadouts
         changeTracker.plugins = changeTracker.plugins || toSave.plugins
         changeTracker.pluginCustomStorage = changeTracker.pluginCustomStorage || toSave.pluginCustomStorage
         changeTracker.root = changeTracker.root || toSave.root
@@ -631,7 +720,7 @@ export async function saveDb() {
             for (const key in localDb) {
                 if (
                     key !== 'characters' && key !== 'botPresets' && key !== 'modules' &&
-                    key !== 'loadouts' && key !== 'plugins' && key !== 'pluginCustomStorage'
+                    key !== 'plugins' && key !== 'pluginCustomStorage'
                 ) {
                     mergedDb[key] = safeStructuredClone(localDb[key])
                 }
@@ -744,11 +833,182 @@ export async function saveDb() {
 
         if (supportsPatchSync && !options?.forceFullWrite) {
             const patchData = await patcher.set(db, safeStructuredClone(toSave))
-            const patchResult = await forageStorage.patchItem('database/database.bin', patchData)
-            saved = patchResult.success
-            if (patchResult.etag) {
-                newEtag = patchResult.etag
-                forageStorage.setDbEtag(patchResult.etag)
+            // Refuse to send patches that would corrupt server-side lazy chats.
+            // chatToStub strips chats to metadata before diffing, so the only
+            // way these ops appear is a baseline desync. Falling through to a
+            // full write rebuilds the server's stub view from scratch and
+            // resyncs the patcher baseline. The console.error is the primary
+            // breadcrumb for tracking down the unknown root cause.
+            const dangerous = findDangerousChatOps(patchData.patch)
+            if (dangerous.length > 0) {
+                // Always log a one-line summary so production environments
+                // see enough to file a bug report. The rich dump below is
+                // gated behind a localStorage flag — chronic loops would
+                // otherwise dump 5 console.errors every 5s save cycle.
+                const sampleOps = dangerous.slice(0, 3).map(d => `${d.op} ${d.path}`).join(', ')
+                console.error(
+                    `[Save] Patcher emitted ${dangerous.length} chat-internal field op(s) — `
+                    + `falling back to full write. sample: ${sampleOps}`
+                    + ` (verbose dump: localStorage.setItem('${CHAT_GUARD_DEBUG_KEY}', '1') then reproduce)`
+                )
+                showChatGuardToastThrottled('client')
+
+                if (isChatGuardDebugEnabled()) {
+                // ── Diagnostic dump for unknown root cause ────────────────
+                // chatToStub is supposed to strip every chat down to 6
+                // metadata fields before the diff. If non-stub fields end
+                // up in patch ops, something slipped past it. Dump enough
+                // shape info to figure out which side of the diff carries
+                // the contraband (baseline vs current) and what flags the
+                // chat object has.
+                const affectedChats: Record<string, any> = {}
+                const seen = new Set<string>()
+                const baselineCharsLen = (patcher as any).lastSyncedDb?.characters?.length ?? -1
+                const currentCharsLen = db.characters?.length ?? -1
+
+                const summarize = (c: any) => {
+                    if (c == null) return null
+                    const keys = Object.keys(c)
+                    // Per-key shape: which fields are strings vs arrays vs objects vs primitives
+                    const keyShapes: Record<string, string> = {}
+                    for (const k of keys) {
+                        const v = c[k]
+                        if (v === null) keyShapes[k] = 'null'
+                        else if (Array.isArray(v)) keyShapes[k] = `Array(${v.length})`
+                        else if (typeof v === 'object') keyShapes[k] = `Object(${Object.keys(v).length})`
+                        else keyShapes[k] = `${typeof v}=${typeof v === 'string' && v.length > 30 ? v.slice(0, 30) + '…' : JSON.stringify(v)}`
+                    }
+                    return {
+                        keys,                                  // full key list, not just length
+                        keyShapes,                             // per-key type/preview
+                        classification: classifyChat(c),
+                        _stub: c._stub,
+                        _placeholder: c._placeholder,
+                        hasMessage: Array.isArray(c.message),
+                        messageLen: Array.isArray(c.message) ? c.message.length : null,
+                        id: c.id,
+                        name: c.name,
+                        // Type fingerprints help identify Svelte $state proxies
+                        // or other wrapper objects that might bypass deep clone.
+                        ctor: c?.constructor?.name,
+                        isFrozen: Object.isFrozen(c),
+                        isProxy: typeof c === 'object' && c !== null && (c as any)?.[Symbol.toStringTag] !== undefined,
+                    }
+                }
+
+                // Re-run chatToStub on the current chat to see what the patcher
+                // would have produced. If this still has non-stub fields, the
+                // bug is INSIDE chatToStub's isChatStub short-circuit (chat
+                // already has `_stub: true` but isn't actually a stub).
+                const stubReplay = (c: any) => {
+                    if (c == null) return null
+                    try {
+                        const result = chatToStub(c)
+                        return summarize(result)
+                    } catch (e) {
+                        return { error: String(e) }
+                    }
+                }
+
+                for (const op of dangerous) {
+                    const m = op.path.match(/^\/characters\/(\d+)\/chats\/(\d+)\//)
+                    if (!m) continue
+                    const key = `${m[1]}/${m[2]}`
+                    if (seen.has(key)) continue
+                    seen.add(key)
+                    if (seen.size > 5) break
+                    const ci = +m[1], chi = +m[2]
+                    const baselineChar = (patcher as any).lastSyncedDb?.characters?.[ci]
+                    const currentChar = db.characters?.[ci]
+                    const baselineChat = baselineChar?.chats?.[chi]
+                    const currentChat = currentChar?.chats?.[chi]
+                    const opsForThisChat = dangerous.filter(d => d.path.startsWith(`/characters/${ci}/chats/${chi}/`))
+                    // Reference identity: same object? same chats array? same chat slot?
+                    const refIdentity = {
+                        sameCharacter: baselineChar === currentChar,
+                        sameChatsArray: baselineChar?.chats === currentChar?.chats,
+                        sameChatSlot: baselineChat === currentChat,
+                    }
+                    affectedChats[key] = {
+                        characterContext: {
+                            baselineChaId: baselineChar?.chaId,
+                            currentChaId: currentChar?.chaId,
+                            chaIdsMatch: baselineChar?.chaId === currentChar?.chaId,
+                            baselineChatsLen: baselineChar?.chats?.length ?? -1,
+                            currentChatsLen: currentChar?.chats?.length ?? -1,
+                            refIdentity,
+                        },
+                        baselineChat: summarize(baselineChat),
+                        currentChat: summarize(currentChat),
+                        // The crucial diagnostic: if this still leaks message etc,
+                        // chatToStub's isChatStub fast-path was the offender.
+                        currentAfterChatToStub: stubReplay(currentChat),
+                        baselineAfterChatToStub: stubReplay(baselineChat),
+                        opsForThisChat,
+                    }
+                }
+
+                // Distribution of stub/placeholder flags across the affected
+                // characters' chats — useful to spot wholesale corruption
+                // (e.g. a plugin replacing the entire chats array with
+                // _stub-tagged objects).
+                const charsDistribution: Record<string, any> = {}
+                for (const k of Array.from(seen).slice(0, 3)) {
+                    const ci = +k.split('/')[0]
+                    const baselineChats = (patcher as any).lastSyncedDb?.characters?.[ci]?.chats ?? []
+                    const currentChats = db.characters?.[ci]?.chats ?? []
+                    const tally = (chats: any[]) => {
+                        const t = { total: chats.length, stub: 0, placeholder: 0, hybrid: 0, full: 0, neither: 0 }
+                        for (const c of chats) {
+                            if (!c) continue
+                            const isStub = c._stub === true
+                            const isPh = c._placeholder === true
+                            const hasMsg = Array.isArray(c.message)
+                            if (isStub && hasMsg) t.hybrid++
+                            else if (isStub) t.stub++
+                            else if (isPh) t.placeholder++
+                            else if (hasMsg) t.full++
+                            else t.neither++
+                        }
+                        return t
+                    }
+                    charsDistribution[`character[${ci}]`] = {
+                        baseline: tally(baselineChats),
+                        current: tally(currentChats),
+                    }
+                }
+
+                let activeCharID = -1
+                try { selectedCharID.subscribe(v => { activeCharID = v })() } catch {}
+                console.error('[Save:guard-debug] context:', {
+                    baselineCharsLen,
+                    currentCharsLen,
+                    selectedCharID: activeCharID,
+                    totalDangerousOps: dangerous.length,
+                    uniqueAffectedChats: seen.size,
+                })
+                console.error('[Save:guard-debug] all dangerous ops:', dangerous)
+                console.error('[Save:guard-debug] affected chats (baseline / current / stubReplay):', affectedChats)
+                console.error('[Save:guard-debug] chats[] distribution per affected character:', charsDistribution)
+                }
+                // Leave saved=false so the full-write path below kicks in.
+            } else {
+                const patchResult = await forageStorage.patchItem('database/database.bin', patchData)
+                saved = patchResult.success
+                if (patchResult.etag) {
+                    newEtag = patchResult.etag
+                    forageStorage.setDbEtag(patchResult.etag)
+                }
+                if (patchResult.persistWarning) {
+                    showPersistWarningOnce(patchResult.persistWarning)
+                }
+                // Server's chat-internal-field guard rejected the patch — the
+                // client-side guard above missed this case. Surface to user
+                // and continue to the full-write fallback below.
+                if (patchResult.chatGuardRejected) {
+                    console.error('[Save] Server rejected patch — chat-internal field ops detected server-side')
+                    showChatGuardToastThrottled('server')
+                }
             }
         }
         if (!saved) {
@@ -1216,6 +1476,15 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
 
     addUncleanable(db.customBackground);
     addUncleanable(db.userIcon);
+    // Uploaded notification sounds. Preset-id values (e.g. "bell") are not
+    // asset paths, so they add a harmless basename that matches no stored asset.
+    addUncleanable(db.messageSound);
+    addUncleanable(db.translateSound);
+    if (db.customSounds) {
+        for (const s of db.customSounds) {
+            addUncleanable(s.path);
+        }
+    }
 
     for (const cha of db.characters) {
         if (cha.image) {
@@ -1253,12 +1522,27 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
                     addUncleanable(asset[1])
                 }
             }
+            if(module.icon){
+                addUncleanable(module.icon)
+            }
         }
     }
 
     if (db.personas) {
         db.personas.map((v) => {
             addUncleanable(v.icon);
+
+            if(v.embeddedModule){
+                const assets = v.embeddedModule.assets
+                if (assets) {
+                    for (const asset of assets) {
+                        addUncleanable(asset[1])
+                    }
+                }
+                if(v.embeddedModule.icon){
+                    addUncleanable(v.embeddedModule.icon)
+                }
+            }
         });
     }
 
@@ -1296,6 +1580,13 @@ export function replaceDbResources(db: Database, replacer: { [key: string]: stri
 
     db.customBackground = replaceData(db.customBackground);
     db.userIcon = replaceData(db.userIcon);
+    db.messageSound = replaceData(db.messageSound);
+    db.translateSound = replaceData(db.translateSound);
+    if (db.customSounds) {
+        for (const s of db.customSounds) {
+            s.path = replaceData(s.path);
+        }
+    }
 
     for (const cha of db.characters) {
         if (cha.image) {
@@ -1449,7 +1740,6 @@ export class LocalWriter {
      * @returns {Promise<boolean>} - A promise that resolves to a boolean indicating success.
      */
     async init(name = 'Binary', ext = ['bin']): Promise<boolean> {
-        const streamSaver = await import('streamsaver')
         const writableStream = streamSaver.createWriteStream(name + '.' + ext[0])
         this.writer = writableStream.getWriter()
         return true
@@ -2105,7 +2395,7 @@ export async function loadInternalBackup() {
     const backupDecoded = await decodeRisuSave(Buffer.from(data) as unknown as Uint8Array)
     setDatabase(backupDecoded)
 
-    alertNormal('Loaded backup')
+    notifySuccess('Loaded backup')
 
 
 

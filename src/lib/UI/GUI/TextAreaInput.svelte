@@ -1,5 +1,7 @@
-<div 
-    class={"border border-darkborderc relative n-scroll focus-within:border-borderc rounded-md shadow-xs text-textcolor bg-transparent focus-within:ring-borderc focus-within:ring-2 focus-within:outline-hidden transition-colors duration-200 z-20 focus-within:z-40" + ((className) ? (' ' + className) : '')} 
+<div
+    class={"border border-darkborderc relative flex flex-col n-scroll focus-within:border-borderc rounded-md shadow-xs text-textcolor bg-transparent focus-within:ring-borderc focus-within:ring-2 focus-within:outline-hidden transition-colors duration-200 z-20 focus-within:z-40"
+        + (margin === 'top' ? ' mt-4' : margin === 'bottom' ? ' mb-4' : margin === 'both' ? ' mt-2 mb-2' : '')
+        + ((className) ? (' ' + className) : '')}
     class:text-sm={size === 'sm' || (size === 'default' && $textAreaTextSize === 1)}
     class:text-md={size === 'md' || (size === 'default' && $textAreaTextSize === 2)}
     class:text-lg={size === 'lg' || (size === 'default' && $textAreaTextSize === 3)}
@@ -29,15 +31,12 @@
     class:min-h-64={height === 'default' && $textAreaSize === 3}
     class:min-h-72={height === 'default' && $textAreaSize === 4}
     class:min-h-80={height === 'default' && $textAreaSize === 5}
-    class:mb-4={margin === 'bottom'}
-    class:mb-2={margin === 'both'}
-    class:mt-4={margin === 'top'}
-    class:mt-2={margin === 'both'}
     bind:this={highlightDom}
     onfocusout={() => {
         hideAutoComplete()
     }}
 >
+    <div class="relative flex-1 min-h-0 w-full">
     {#if !highlight || $disableHighlight}
         <textarea
             class="w-full h-full bg-transparent focus-within:outline-hidden resize-none absolute top-0 left-0 z-50 overflow-y-auto"
@@ -75,6 +74,7 @@
                     e.preventDefault()
                     popUpEditorStore.value = value
                     popUpEditorStore.mode = 'default'
+                    popUpEditorStore.language = popupLanguage
                     popUpEditorStore.open = true
 
                     //lazy wait
@@ -92,6 +92,7 @@
                     e.preventDefault()
                     popUpEditorStore.value = value
                     popUpEditorStore.mode = 'default'
+                    popUpEditorStore.language = popupLanguage
                     popUpEditorStore.open = true
 
                     //lazy wait
@@ -118,6 +119,7 @@
                 e.preventDefault()
                 popUpEditorStore.value = value
                 popUpEditorStore.mode = 'default'
+                popUpEditorStore.language = popupLanguage
                 popUpEditorStore.open = true
 
                 while(popUpEditorStore.open){
@@ -136,6 +138,7 @@
                 e.preventDefault()
                 popUpEditorStore.value = value
                 popUpEditorStore.mode = 'default'
+                popUpEditorStore.language = popupLanguage
                 popUpEditorStore.open = true
 
                 const checkInterval = setInterval(() => {
@@ -159,6 +162,24 @@
         translate="no"
     >{value ?? ''}</div>
 {/if}
+    </div>
+    {#if showActionBar}
+        <div class="shrink-0 flex items-center justify-end gap-0.5 px-1.5 py-1 border-t border-darkborderc text-textcolor2">
+            <button type="button" class="p-1 rounded hover:text-textcolor transition-colors" title={language.copy} aria-label={language.copy} onclick={copyValue}>
+                {#if copied}
+                    <CheckIcon size={16} class="text-green-500" />
+                {:else}
+                    <CopyIcon size={16} />
+                {/if}
+            </button>
+            <button type="button" class="p-1 rounded hover:text-red-500 transition-colors" title={language.reset} aria-label={language.reset} onclick={resetValue}>
+                <RefreshCwIcon size={16} />
+            </button>
+            <button type="button" class="p-1 rounded hover:text-textcolor transition-colors" title={language.hotkeyDesc.popupEditor} aria-label={language.hotkeyDesc.popupEditor} onclick={openPopupEditor}>
+                <Maximize2 size={16} />
+            </button>
+        </div>
+    {/if}
     <div class="hidden absolute z-100 bg-bgcolor border border-darkborderc p-2 flex-col" bind:this={autoCompleteDom}>
         {#each autocompleteContents as content, i}
             <button class="w-full text-left py-1 px-2 bg-bgcolor" class:text-blue-500={selectingAutoComplete === i} onclick={() => {
@@ -175,6 +196,10 @@
   import { DBState, disableHighlight, popUpEditorStore } from 'src/ts/stores.svelte';
   import { isMobile } from 'src/ts/platform'
     import { hotkeyMatches } from 'src/ts/hotkey';
+    import { Maximize2, CopyIcon, CheckIcon, RefreshCwIcon } from '@lucide/svelte'
+    import { alertConfirm } from 'src/ts/alert'
+    import { isSecureContext } from 'src/ts/secureContext'
+    import { language } from 'src/lang'
     interface Props {
         size?: 'xs'|'sm'|'md'|'lg'|'xl'|'default';
         autocomplete?: 'on'|'off';
@@ -190,6 +215,8 @@
         optimaizedInput?: boolean;
         highlight?: boolean;
         onchange?: () => void;
+        popupLanguage?: string;
+        actionBar?: boolean;
     }
 
     let {
@@ -206,8 +233,14 @@
         className = '',
         optimaizedInput = true,
         highlight = false,
-        onchange = () => {}
+        onchange = () => {},
+        popupLanguage = 'markdown',
+        actionBar = undefined
     }: Props = $props();
+    // `actionBar` prop overrides per-field; otherwise follow the accessibility toggle.
+    const showActionBar = $derived(actionBar ?? DBState.db.showInputActionBar ?? true)
+    let copied = $state(false)
+    let copiedTimer: ReturnType<typeof setTimeout> | null = null
     let selectingAutoComplete = $state(0)
     // TODO: Review if highlight prop can change dynamically - if so, this needs to be reactive
     // svelte-ignore state_referenced_locally
@@ -215,6 +248,7 @@
     let inpa = $state(0)
     let highlightDom: HTMLDivElement = $state()
     let optiValue = $state(value)
+    let hlTimer: ReturnType<typeof setTimeout> | null = null
     let autoCompleteDom: HTMLDivElement = $state()
     let autocompleteContents:string[] = $state([])
     let inputDom: HTMLDivElement = $state()
@@ -305,18 +339,62 @@
         autocompleteContents = []
     }
 
+    // Open the Monaco popup editor for this field, mirroring the contextmenu/hotkey path.
+    const openPopupEditor = () => {
+        popUpEditorStore.value = value
+        popUpEditorStore.mode = 'default'
+        popUpEditorStore.language = popupLanguage
+        popUpEditorStore.open = true
+
+        const checkInterval = setInterval(() => {
+            if(!popUpEditorStore.open){
+                value = popUpEditorStore.value
+                onInput()
+                clearInterval(checkInterval)
+            }
+        }, 100)
+    }
+
+    const copyValue = async () => {
+        const text = value ?? ''
+        try {
+            if(isSecureContext && navigator.clipboard?.writeText){
+                await navigator.clipboard.writeText(text)
+            }
+            else {
+                // Fallback for non-secure (remote http) contexts where the Clipboard API is unavailable
+                const ta = document.createElement('textarea')
+                ta.value = text
+                ta.style.position = 'fixed'
+                ta.style.opacity = '0'
+                document.body.appendChild(ta)
+                ta.focus()
+                ta.select()
+                document.execCommand('copy')
+                document.body.removeChild(ta)
+            }
+            copied = true
+            if(copiedTimer) clearTimeout(copiedTimer)
+            copiedTimer = setTimeout(() => { copied = false }, 1500)
+        } catch (error) {}
+    }
+
+    const resetValue = async () => {
+        if(await alertConfirm(language.clearInputConfirm)){
+            value = ''
+            onInput()
+        }
+    }
+
     onMount(() => {
         highlighter(highlightDom, highlightId)
     })
 
     onDestroy(() => {
+        if (hlTimer) clearTimeout(hlTimer)
+        if (copiedTimer) clearTimeout(copiedTimer)
         removeHighlight(highlightId)
     })
-
-    const highlightChange = async (value:string, highlightId:number) => {
-        await sleep(1)
-        highlighter(highlightDom, highlightId)
-    }
 
     const handleKeyDown = (e:KeyboardEvent) => {
         if(autocompleteContents.length >= 1){
@@ -372,8 +450,13 @@
     $effect.pre(() => {
         optiValue = value
     });
+    // Re-highlight on a debounce instead of every keystroke, and only when
+    // highlighting is actually on for this editor.
     $effect.pre(() => {
-        highlightChange(value, highlightId)
+        value
+        if (!highlight || $disableHighlight) return
+        if (hlTimer) clearTimeout(hlTimer)
+        hlTimer = setTimeout(() => highlighter(highlightDom, highlightId), 200)
     });
 
 </script>

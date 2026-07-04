@@ -7,7 +7,7 @@ import {
     type TranslatorPreset,
 } from "./presets";
 import { globalFetch } from "../globalApi.svelte"
-import { alertError } from "../alert"
+import { notifyError } from "../alert"
 import { requestChatData } from "../process/request/request"
 import { doingChat, type OpenAIChat } from "../process/index.svelte"
 import { applyMarkdownToNode, type simpleCharacterArgument } from "../parser/parser.svelte"
@@ -16,7 +16,7 @@ import { clearPersistentPrefix, listPersistentKeys, makeHashedStorageKey, readPe
 import { getModuleRegexScripts } from "../process/modules"
 import { getNodetextToSentence, sleep } from "../util"
 import { processScriptFull } from "../process/scripts"
-import sendSound from '../../etc/send.mp3'
+import { playNotificationSound } from '../notificationSound'
 
 let cache={
     origin: [''],
@@ -111,7 +111,7 @@ export async function runTranslator(text:string, reverse:boolean, from:string,ta
             const result = await translateMain(trimed, arg);
 
             if(result.startsWith('ERR::')){
-                alertError(result)
+                notifyError(result)
                 return text
             }
 
@@ -302,10 +302,10 @@ export async function translateHTML(html: string, reverse:boolean, charArg:simpl
     if(db.translatorType === 'llm'){
         const tr = db.translator || 'en'
         const from = db.translatorInputLanguage
-        const r = await translateLLM(html, {to: tr, from: from, regenerate})
-        if(db.playMessageOnTranslateEnd){
-            const audio = new Audio(sendSound);
-            audio.play().catch(() => {});
+        let translated = false
+        const r = await translateLLM(html, {to: tr, from: from, regenerate, onCacheState: (cached) => { translated = !cached }})
+        if(translated && db.playMessageOnTranslateEnd){
+            playNotificationSound(db.translateSound, db.translateSoundVolume)
         }
 
         return applyEdittransRegex(r, charArg, alwaysExistChar)
@@ -517,14 +517,16 @@ function needSuperChunkedTranslate(){
     return getDatabase().translatorType === 'deeplX'
 }
 
-async function translateLLM(text:string, arg:{to:string, from:string, regenerate?:boolean,translatorNote?:string}):Promise<string>{
+async function translateLLM(text:string, arg:{to:string, from:string, regenerate?:boolean,translatorNote?:string, onCacheState?:(cached:boolean) => void}):Promise<string>{
     if(!arg.regenerate){
         const cacheMatch = llmTranslateCache.get(text)
         if(cacheMatch){
+            arg.onCacheState?.(true)
             return cacheMatch
         }
         const persistedCacheMatch = await getPersistentLLMCache(text)
         if (persistedCacheMatch !== null) {
+            arg.onCacheState?.(true)
             return persistedCacheMatch
         }
     }
@@ -579,11 +581,11 @@ async function translateLLM(text:string, arg:{to:string, from:string, regenerate
     }, 'translate')
 
     if(rq.type === 'fail'){
-        alertError(rq.result)
+        notifyError(rq.result)
         return text
     }
     if(rq.type === 'streaming' || rq.type === 'multiline'){
-        alertError('Unexpected response type')
+        notifyError('Unexpected response type')
         return text
     }
     const result = rq.result.replace(/<style-data style-index="(\d+)" ?\/?>/g, (match, p1) => {
@@ -591,6 +593,7 @@ async function translateLLM(text:string, arg:{to:string, from:string, regenerate
     }).replace(/<\/style-data>/g, '')
     llmTranslateCache.set(text, result)
     void setPersistentLLMCache(text, result)
+    arg.onCacheState?.(false)
     return result
 }
 
@@ -645,14 +648,19 @@ export async function exportLLMCacheAsJSON():Promise<Record<string, string>>{
     return result
 }
 
-export async function importLLMCacheFromJSON(data:Record<string, string>):Promise<number>{
+export async function importLLMCacheFromJSON(data:Record<string, string>):Promise<{count: number, failed: number}>{
     let count = 0
+    let failed = 0
     for(const [key, value] of Object.entries(data)){
-        llmTranslateCache.set(key, value)
-        await setPersistentLLMCache(key, value)
-        count++
+        try {
+            await setPersistentLLMCache(key, value)
+            llmTranslateCache.set(key, value)
+            count++
+        } catch {
+            failed++
+        }
     }
-    return count
+    return {count, failed}
 }
 
 
