@@ -8,7 +8,7 @@ import { alertError, notifyError } from "../alert";
 import { parseChatML } from "../parser/chatML";
 import { loadLoreBookV3Prompt } from "./lorebook.svelte";
 import { findCharacterbyId, getAuthorNoteDefaultText, getPersonaPrompt, getUserName, isLastCharPunctuation, trimUntilPunctuation, parseToggleSyntax, prebuiltAssetCommand } from "../util";
-import { requestChatData } from "./request/request";
+import { requestChatData, resolveRequestJob } from "./request/request";
 import { stableDiff } from "./stableDiff";
 import { processScript, processScriptFull, risuChatParser } from "./scripts";
 import { exampleMessage } from "./exampleMessages";
@@ -24,6 +24,7 @@ import { runImageEmbedding } from "./transformers";
 import { runLuaEditTrigger } from "./scriptings";
 import { getModelInfo, LLMFlags } from "../model/modellist";
 import { resolveChatModelBinding, resolvePresetMaxOutputTokens } from "./request/modelPresetBinding";
+import type { ProviderJobResult } from "./request/providerJob";
 import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
@@ -1420,13 +1421,96 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     let result = ''
     let emoChanged = false
     let resendChat = false
+    const finalizeAssistantMessage = async (msgIndex: number, ttsText: string) => {
+        DBState.db.characters[selectedChar].chats[selectedChat] = runCurrentChatFunction(DBState.db.characters[selectedChar].chats[selectedChat])
+        currentChat = DBState.db.characters[selectedChar].chats[selectedChat]
+        const triggerResult = await runTrigger(currentChar, 'output', {chat:currentChat})
+        if(triggerResult && triggerResult.chat){
+            currentChat = normalizeChat(triggerResult.chat)
+        }
+        if(triggerResult && triggerResult.sendAIprompt){
+            resendChat = true
+        }
+        const inlayr = runInlayScreen(currentChar, currentChat.message[msgIndex].data)
+        currentChat.message[msgIndex].data = inlayr.text
+        DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
+        if(inlayr.promise){
+            const t = await inlayr.promise
+            currentChat.message[msgIndex].data = t
+            DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
+        }
+        if(DBState.db.ttsAutoSpeech){
+            await sayTTS(currentChar, ttsText)
+        }
+    }
     
-    if(abortSignal.aborted === true){
+    if(abortSignal.aborted === true && req.type !== 'job'){
         return false
     }
     if(req.type === 'fail'){
         throwError(req.result)
         return false
+    }
+    else if(req.type === 'job'){
+        const message = DBState.db.characters[selectedChar].chats[selectedChat].message
+        let msgIndex = message.length
+        let prefix = ''
+        if(arg.continue){
+            msgIndex -= 1
+            prefix = message[msgIndex].data
+        }
+        DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = true
+        DBState.db.characters[selectedChar].reloadKeys += 1
+
+        let jobResult: ProviderJobResult
+        try {
+            jobResult = await req.job.wait({
+                signal: abortSignal,
+            })
+        } catch (e) {
+            jobResult = { type: 'fail' as const, result: e instanceof Error ? e.message : String(e) }
+        } finally {
+            DBState.db.characters[selectedChar].chats[selectedChat].isStreaming = false
+            DBState.db.characters[selectedChar].reloadKeys += 1
+        }
+
+        if(jobResult.type === 'canceled'){
+            return false
+        }
+        if(jobResult.type === 'fail'){
+            if(abortSignal.aborted){
+                return false
+            }
+            throwError(jobResult.result)
+            return false
+        }
+
+        if(arg.continue){
+            message[msgIndex].data = prefix + jobResult.result
+        }
+        else{
+            message.push({
+                role: 'char',
+                data: jobResult.result,
+                saying: currentChar.chaId,
+                time: Date.now(),
+                generationInfo,
+                promptInfo,
+                chatId: generationId,
+            })
+            msgIndex = message.length - 1
+        }
+
+        result = jobResult.result
+        if(DBState.db.removeIncompleteResponse){
+            result = trimUntilPunctuation(result)
+        }
+        const result2 = await processScriptFull(nowChatroom, reformatContent(prefix + result), 'editoutput', msgIndex)
+        DBState.db.characters[selectedChar].chats[selectedChat].message[msgIndex].data = result2.data
+        result = result2.data
+        emoChanged = result2.emoChanged
+
+        await finalizeAssistantMessage(msgIndex, result)
     }
     else if(req.type === 'streaming'){
         const reader = req.result.getReader()
@@ -1500,26 +1584,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             return false
         }
 
-        DBState.db.characters[selectedChar].chats[selectedChat] = runCurrentChatFunction(DBState.db.characters[selectedChar].chats[selectedChat])
-        currentChat = DBState.db.characters[selectedChar].chats[selectedChat]        
-        const triggerResult = await runTrigger(currentChar, 'output', {chat:currentChat})
-        if(triggerResult && triggerResult.chat){
-            currentChat = normalizeChat(triggerResult.chat)
-        }
-        if(triggerResult && triggerResult.sendAIprompt){
-            resendChat = true
-        }
-        const inlayr = runInlayScreen(currentChar, currentChat.message[msgIndex].data)
-        currentChat.message[msgIndex].data = inlayr.text
-        DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
-        if(inlayr.promise){
-            const t = await inlayr.promise
-            currentChat.message[msgIndex].data = t
-            DBState.db.characters[selectedChar].chats[selectedChat] = currentChat
-        }
-        if(DBState.db.ttsAutoSpeech){
-            await sayTTS(currentChar, result)
-        }
+        await finalizeAssistantMessage(msgIndex, result)
     }
     else{
         const msgs = (req.type === 'success') ? [['char',req.result]] as const 
@@ -1812,12 +1877,13 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 },
             ]
 
-            const rq = await requestChatData({
+            let rq = await requestChatData({
                 formated: promptbody,
                 bias: emobias,
                 currentChar: currentChar,
                 maxTokens: 30,
             }, 'emotion', abortSignal)
+            rq = await resolveRequestJob(rq, abortSignal)
 
             if(rq.type === 'fail'){
                 if(abortSignal.aborted){
@@ -1826,6 +1892,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 throwError(rq.result)
                 return true
             }
+            let emotionResult = ''
             if(rq.type === 'streaming' || rq.type === 'multiline'){
                 if(abortSignal.aborted){
                     return true
@@ -1834,11 +1901,14 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                 return true
             }
             else{
+                if(rq.type === 'success'){
+                    emotionResult = rq.result
+                }
                 emotionList = currentEmotion.map((a) => {
                     return a[0]
                 })
                 try {
-                    const emotion:string = rq.result.replace(/ |\n/g,'').trim().toLocaleLowerCase()
+                    const emotion:string = emotionResult.replace(/ |\n/g,'').trim().toLocaleLowerCase()
                     let emotionSelected = false
                     for(const emo of currentEmotion){
                         if(emo[0] === emotion){

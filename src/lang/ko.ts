@@ -1362,6 +1362,7 @@ export const languageKorean = {
     "이 플러그인은 {{plugin_version}} 버전입니다. 이 버전의 PocketRisu와 호환되지 않습니다. 플러그인을 {{required_version}} 버전으로 업데이트하세요.",
   imageTranslation: "이미지 번역",
   banCharacterset: "문자 집합으로 자동 재생성",
+  banCharactersetDesc: "응답에 선택한 문자 집합이 포함되면 자동으로 다시 생성합니다. 배치 작업은 결과가 몇 분 걸릴 수 있어 자동 재생성을 수행하지 않습니다. 이 재시도 동작이 필요하면 배치가 아닌 요청을 사용하세요.",
   realmDirectOpen: "RisuRealm 미리보기에서 바로 열기",
   showPromptComparison: "프롬프트 비교 보기",
   inlayErrorResponse: "인레이 오류 응답",
@@ -1479,7 +1480,7 @@ export const languageKorean = {
   showFolderNameInIcon: "아이콘에 폴더 이름 표시",
   claudeCachingRetrival: "Claude 캐싱 재활용",
   claudeCachingRetrivalDesc:
-    "4분마다 요청하여 Claude 캐싱의 캐시 시간을 연장합니다. 캐시 누락률을 줄일 수 있지만, 적절히 사용하지 않으면 비용이 증가할 수 있습니다.",
+    "4분마다 요청하여 Claude 캐싱의 캐시 시간을 연장합니다. 캐시 누락률을 줄일 수 있지만, 적절히 사용하지 않으면 비용이 증가할 수 있습니다. 프리셋 요청에는 적용되지 않습니다.",
   automaticCachePoint: "자동 캐시 포인트",
   experimentalChatCompression: "실험적 채팅 데이터 처리",
   loadingChatData: "채팅 데이터 로딩 중",
@@ -2297,6 +2298,7 @@ export const languageKorean = {
   showRequestStatus: "요청 상태 표시",
   requestStatus: {
     connecting: "요청 중…",
+    waiting: "대기 중…",
     thinking: "사고 중…",
     responding: "응답 중…",
     retrying: "재시도 중…",
@@ -2313,5 +2315,12 @@ export const languageKorean = {
     thinkingTokensLabel: "사고",
     tokensPerSec: "tok/s",
     cacheHit: "캐시 적중 · {n} 토큰",
+    batchSubmitting: "Anthropic 배치 제출 중...",
+    batchSubmitted: "Anthropic 배치 제출됨",
+    batchRunning: "Anthropic 배치 실행 중",
+    batchCancelRequested: "Anthropic 배치 취소 요청됨",
+    batchSucceeded: "Anthropic 배치 완료",
+    batchFailed: "Anthropic 배치 실패",
+    batchCanceled: "Anthropic 배치 취소됨",
   },
 } satisfies DeepPartial<typeof import("./en").languageEnglish>;

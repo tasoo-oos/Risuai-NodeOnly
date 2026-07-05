@@ -1,6 +1,6 @@
 import { get } from "svelte/store"
 import { getDatabase, type character } from "../storage/database.svelte"
-import { requestChatData } from "./request/request"
+import { requestChatData, resolveRequestJob } from "./request/request"
 import { alertError, notifyError } from "../alert"
 import { fetchNative, globalFetch, readImage } from "../globalApi.svelte"
 import { CharEmotion } from "../stores.svelte"
@@ -31,7 +31,7 @@ export async function stableDiff(currentChar:character,prompt:string){
         },
     ]
 
-    const rq = await requestChatData({
+    let rq = await requestChatData({
         formated: promptbody,
         currentChar: currentChar,
         temperature: 0.2,
@@ -40,18 +40,25 @@ export async function stableDiff(currentChar:character,prompt:string){
         useStreaming: false,
         noMultiGen: true
     }, 'submodel')
+    rq = await resolveRequestJob(rq)
 
 
     if(rq.type === 'fail'){
         notifyError(rq.result)
         return false
     }
+    let responseText = ''
+
     if(rq.type === 'streaming' || rq.type === 'multiline'){
         notifyError('Unexpected response type')
         return false
     }
 
-    const r = rq.result.replace(/<Thoughts>[\s\S]*?<\/Thoughts>/g, '').trim()
+    if(rq.type === 'success'){
+        responseText = rq.result
+    }
+
+    const r = responseText.replace(/<Thoughts>[\s\S]*?<\/Thoughts>/g, '').trim()
 
 
     const genPrompt = currentChar.newGenData.prompt.replaceAll('{{slot}}', r)

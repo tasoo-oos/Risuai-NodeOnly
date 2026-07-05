@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { requestChatData } from "src/ts/process/request/request";
+	import { requestChatData, resolveRequestJob } from "src/ts/process/request/request";
     import { doingChat, type OpenAIChat } from "../../ts/process/index.svelte";
     import { setDatabase, type character, type Message, type Database } from "../../ts/storage/database.svelte";
 	import { DBState } from 'src/ts/stores.svelte';
@@ -85,9 +85,14 @@
                 formated: promptbody,
                 bias: {},
                 currentChar : currentChar as character
-            }, 'submodel', abortController.signal).then(rq2=>{
-                if(rq2.type !== 'fail' && rq2.type !== 'streaming' && rq2.type !== 'multiline' && progress){
-                    var suggestMessagesNew = rq2.result.split('\n').filter(msg => msg.startsWith('-')).map(msg => msg.replace('-','').trim())
+            }, 'submodel', abortController.signal).then(async rq2=>{
+                rq2 = await resolveRequestJob(rq2, abortController.signal)
+                let resultText = ''
+                if(rq2.type !== 'fail' && rq2.type !== 'streaming' && rq2.type !== 'multiline'){
+                    resultText = rq2.result
+                }
+                if(resultText && progress){
+                    var suggestMessagesNew = resultText.split('\n').filter(msg => msg.startsWith('-')).map(msg => msg.replace('-','').trim())
                     const db:Database = DBState.db;
                     db.characters[$selectedCharID].chats[currentChar.chatPage].suggestMessages = suggestMessagesNew
                     suggestMessages = suggestMessagesNew
@@ -193,4 +198,3 @@
         100% { transform: rotate(360deg); }
     }
 </style>
-

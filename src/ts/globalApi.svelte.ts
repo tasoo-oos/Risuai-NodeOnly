@@ -27,6 +27,7 @@ import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import { isLocalNetworkUrl } from "./network/localNetwork";
 import { decodeProxyJobWsChunk, formatProxyStreamErrorMessage, parseProxyJobWsEvent } from "./network/proxyJobWs";
+import { shouldLogFetch } from "./fetchLogPolicy";
 
 export const forageStorage = new AutoStorage()
 
@@ -1991,6 +1992,7 @@ const pipeFetchLog = (fetchLogIndex: number, readableStream: ReadableStream<Uint
  * @param {AbortSignal} [arg.signal] - The signal to abort the request.
  * @param {boolean} [arg.useRisuTk] - Whether to use Risu token.
  * @param {string} [arg.chatId] - The chat ID associated with the request.
+ * @param {boolean} [arg.suppressFetchLog] - Whether to skip automatic streamed fetch logging.
  * @returns {Promise<Object>} - A promise that resolves to an object containing the response body, headers, and status.
  * @returns {ReadableStream<Uint8Array>} body - The response body as a readable stream.
  * @returns {Headers} headers - The response headers.
@@ -2007,6 +2009,7 @@ export async function fetchNative(url: string, arg: {
     interceptor?: string
     requestTimeoutMs?: number
     networkRoute?: 'auto' | 'local_network'
+    suppressFetchLog?: boolean
 }): Promise<Response> {
     const useInterceptor = !!arg.interceptor
     if (arg.body === undefined && (arg.method === 'POST' || arg.method === 'PUT')) {
@@ -2045,15 +2048,17 @@ export async function fetchNative(url: string, arg: {
         throw new Error('Invalid body type')
     }
 
-    addFetchLog({
-        body: realBody ? new TextDecoder().decode(realBody) : '',
-        headers: arg.headers,
-        response: 'Streamed Fetch',
-        success: true,
-        url: url,
-        resType: 'stream',
-        chatId: arg.chatId,
-    })
+    if (shouldLogFetch(arg)) {
+        addFetchLog({
+            body: realBody ? new TextDecoder().decode(realBody) : '',
+            headers: arg.headers,
+            response: 'Streamed Fetch',
+            success: true,
+            url: url,
+            resType: 'stream',
+            chatId: arg.chatId,
+        })
+    }
     const useLocalNetworkRoute = arg.networkRoute === 'local_network' && isLocalNetworkUrl(url)
     const timeoutSignal = buildTimeoutSignal(arg.signal, arg.requestTimeoutMs)
     const requestSignal = timeoutSignal.signal

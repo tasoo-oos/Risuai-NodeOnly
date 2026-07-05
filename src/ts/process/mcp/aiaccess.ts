@@ -1,6 +1,6 @@
 
 
-import { requestChatData } from "../request/request";
+import { requestChatData, resolveRequestJob } from "../request/request";
 import { MCPClientLike } from "./internalmcp";
 import type { MCPTool, RPCToolCallContent } from "./mcplib";
 
@@ -59,19 +59,24 @@ export class AIAccessClient extends MCPClientLike {
                     text: 'Invalid arguments for runLLM. Please provide a valid model and messages.'
                 }];
             }
-            const r = await requestChatData({
+            const r = await resolveRequestJob(await requestChatData({
                 formated: messages.map((msg: any) => ({
                     role: msg.role,
                     content: msg.content
                 })),
                 bias: {}
-            }, model === 'lite' ? 'otherAx' : 'model')
+            }, model === 'lite' ? 'otherAx' : 'model'))
+
+            let success = r.type === 'success'
+            let message = r.type === 'success' || r.type === 'fail'
+                ? r.result
+                : 'Unexpected response type'
 
             return [{
                 type: 'text',
                 text: JSON.stringify({
-                    success: r.type === 'success',
-                    message: r.result
+                    success,
+                    message
                 })
             }]
         }

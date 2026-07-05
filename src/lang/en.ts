@@ -1253,6 +1253,7 @@ export const languageEnglish = {
         "This is {{plugin_version}} version of the plugin. which is not compatible with this version of PocketRisu. please update the plugin to {{required_version}} version.",
     imageTranslation: "Image Translation",
     banCharacterset: "Auto Regenerate On Characterset",
+    banCharactersetDesc: "Automatically retries when a response contains the selected character set. Batch jobs do not auto-regenerate because batch results can take several minutes; use non-batch requests if this retry behavior is required.",
     realmDirectOpen: "Directly open character in RisuRealm",
     showPromptComparison: "Show Prompt Comparison",
     inlayErrorResponse: "Inlay Error Response",
@@ -1362,7 +1363,7 @@ export const languageEnglish = {
     showFolderNameInIcon: "Show Folder Name in Icon",
     claudeCachingRetrival: "Claude Caching Retrival",
     claudeCachingRetrivalDesc:
-        "Extends the cache time for Claude Caching, by requesting every 4 minutes. this can reduce the cache miss rate, but it can increase the cost if its not used properly.",
+        "Extends the cache time for Claude Caching, by requesting every 4 minutes. this can reduce the cache miss rate, but it can increase the cost if its not used properly. It is not applied to the preset request.",
     automaticCachePoint: "Automatic Cache Point",
     experimentalChatCompression: "Experimental Chat Data Handling",
     loadingChatData: "Loading Chat Data",
@@ -2102,6 +2103,7 @@ export const languageEnglish = {
     showRequestStatus: "Show request status",
     requestStatus: {
         connecting: "Connecting…",
+        waiting: "Waiting…",
         thinking: "Thinking…",
         responding: "Responding…",
         retrying: "Retrying…",
@@ -2118,6 +2120,13 @@ export const languageEnglish = {
         thinkingTokensLabel: "think",
         tokensPerSec: "tok/s",
         cacheHit: "Cache hit · {n} tokens",
+        batchSubmitting: "Anthropic batch submitting...",
+        batchSubmitted: "Anthropic batch submitted",
+        batchRunning: "Anthropic batch running",
+        batchCancelRequested: "Anthropic batch cancel requested",
+        batchSucceeded: "Anthropic batch completed",
+        batchFailed: "Anthropic batch failed",
+        batchCanceled: "Anthropic batch canceled",
     },
 
 } satisfies I18nTranslation;
