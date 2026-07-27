@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { alertConfirm, notifyError, notifySuccess } from "../../ts/alert";
+    import { alertConfirm, alertSelect, notifyError, notifySuccess } from "../../ts/alert";
     import { language } from "../../lang";
     import { changeToPreset, copyPreset, downloadPreset, importPreset, saveCurrentPreset, withStableActivePreset } from "../../ts/storage/database.svelte";
     import { v4 as uuidv4 } from "uuid";
@@ -223,9 +223,11 @@
                     }}>
                         <CopyIcon size={18}/>
                     </div>
-                    <div class="text-textcolor2 hover:text-primary cursor-pointer mr-2" role="button" tabindex="0" onclick={(e) => {
+                    <div class="text-textcolor2 hover:text-primary cursor-pointer mr-2" role="button" tabindex="0" onclick={async (e) => {
                         e.stopPropagation()
-                        downloadPreset(i, 'risupreset')
+                        const format = await alertSelect(['Export as Risu Preset', 'Export as JSON', 'Export as YAML'])
+                        const type = format === '1' ? 'json' : format === '2' ? 'yaml' : 'risupreset'
+                        await downloadPreset(i, type)
                         notifySuccess(language.presetExported)
                     }} onkeydown={(e) => {
                         if(e.key === 'Enter' && e.currentTarget instanceof HTMLElement){

@@ -2842,8 +2842,9 @@ import type { HypaModel } from '../process/memory/hypamemory';
 import type { SerializableHypaV3Data } from '../process/memory/hypav3';
 import { defaultHotkeys, type Hotkey } from '../defaulthotkeys';
 import type { OpenAIChat } from '../process/index.svelte';
+import { parseYaml, stringifyYaml } from '../yaml';
 
-export async function downloadPreset(id:number, type:'json'|'risupreset'|'return' = 'json'){
+export async function downloadPreset(id:number, type:'json'|'yaml'|'risupreset'|'return' = 'json'){
     saveCurrentPreset()
     let db = getDatabase()
     let pres = safeStructuredClone(db.botPresets[id])
@@ -2857,6 +2858,9 @@ export async function downloadPreset(id:number, type:'json'|'risupreset'|'return
 
     if(type === 'json'){
         downloadFile(pres.name + "_preset.json", Buffer.from(JSON.stringify(pres, null, 2)))
+    }
+    else if(type === 'yaml'){
+        downloadFile(pres.name + "_preset.yaml", stringifyYaml(pres))
     }
     else if(type === 'risupreset' || type === 'return'){
         const buf = fflate.compressSync(encodeMsgpack({
@@ -2897,7 +2901,7 @@ export async function importPreset(f:{
     data:Uint8Array
 }|null = null){
     if(!f){
-        f = await selectSingleFile(["json", "preset", "risupreset", "risup"])
+        f = await selectSingleFile(["json", "yaml", "yml", "preset", "risupreset", "risup"])
     }
     if(!f){
         return
@@ -2915,7 +2919,10 @@ export async function importPreset(f:{
         }
     }
     else{
-        pre = {...presetTemplate,...(JSON.parse(Buffer.from(f.data).toString('utf-8')))}
+        const imported = f.name.endsWith('.yaml') || f.name.endsWith('.yml')
+            ? parseYaml(f.data)
+            : JSON.parse(Buffer.from(f.data).toString('utf-8'))
+        pre = {...presetTemplate,...(imported as object)}
         console.log(pre)
     }
     let db = getDatabase()
