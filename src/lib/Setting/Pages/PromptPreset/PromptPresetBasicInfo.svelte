@@ -2,7 +2,7 @@
     import { CopyIcon, HardDriveUploadIcon, ImageOffIcon, Share2Icon, Trash2Icon, TrashIcon, UploadIcon } from "@lucide/svelte";
     import { language } from "src/lang";
     import { DBState } from "src/ts/stores.svelte";
-    import { alertConfirm, notifyError, notifySuccess } from "src/ts/alert";
+    import { alertConfirm, alertSelect, notifyError, notifySuccess } from "src/ts/alert";
     import {
         changeToPreset,
         copyPreset,
@@ -39,8 +39,10 @@
         DBState.db.botPresets[activeIndex].image = undefined;
     }
 
-    function handleExport() {
-        downloadPreset(activeIndex, 'risupreset');
+    async function handleExport() {
+        const format = await alertSelect(['Export as Risu Preset', 'Export as JSON', 'Export as YAML']);
+        const type = format === '1' ? 'json' : format === '2' ? 'yaml' : 'risupreset';
+        await downloadPreset(activeIndex, type);
         notifySuccess(language.presetExported);
     }
 

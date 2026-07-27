@@ -86,7 +86,8 @@
     "wasmoon": "^1.16.0",
     "wavefile": "^11.0.0",
     "web-streams-polyfill": "^3.3.3",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "yaml": "2.8.2"
   },
   "devDependencies": {
     "@rollup/plugin-strip": "^3.0.4",

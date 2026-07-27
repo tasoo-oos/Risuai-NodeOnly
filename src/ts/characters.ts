@@ -16,6 +16,7 @@ import { doingChat } from "./process/index.svelte";
 import { importCharacter } from "./characterCards";
 import { importCharacterPackage } from "./characterPackage";
 import { PngChunk } from "./pngChunk";
+import { parseYaml, stringifyYaml } from "./yaml";
 
 export function createNewCharacter() {
     let db = getDatabase()
@@ -164,9 +165,9 @@ export function rmCharEmotion(charId:number, emotionId:number) {
 export async function exportChat(page:number){
     try {
 
-        const mode = await alertSelect(['Export as JSON', "Export as TXT", "Export as HTML File", "Export as HTML Embed"])
-        const doTranslate = (mode === '2' || mode === '3') ? (await alertSelect([language.translateContent, language.doNotTranslate])) === '0' : false
-        const anonymous = (mode === '2' || mode === '3') ? ((await alertSelect([language.includePersonaName, language.hidePersonaName])) === '1') : false
+        const mode = await alertSelect(['Export as JSON', 'Export as YAML', "Export as TXT", "Export as HTML File", "Export as HTML Embed"])
+        const doTranslate = (mode === '3' || mode === '4') ? (await alertSelect([language.translateContent, language.doNotTranslate])) === '0' : false
+        const anonymous = (mode === '3' || mode === '4') ? ((await alertSelect([language.includePersonaName, language.hidePersonaName])) === '1') : false
         const selectedID = get(selectedCharID)
         const db = getDatabase()
         const char = db.characters[selectedID]
@@ -197,22 +198,26 @@ export async function exportChat(page:number){
             return v
         }
 
-        if(mode === '0'){
+        if(mode === '0' || mode === '1'){
             let folders = []
             if(chat.folderId) {
                 folders = db.characters[selectedID].chatFolders?.filter(f => f.id === chat.folderId)
             }
-            const stringl = Buffer.from(JSON.stringify({
+            const exportedChat = {
                 type: 'risuChat',
                 ver: 2,
                 data: chat,
                 folders: folders
-            }), 'utf-8')
+            }
+            const stringl = mode === '1'
+                ? stringifyYaml(exportedChat)
+                : Buffer.from(JSON.stringify(exportedChat), 'utf-8')
     
-            await downloadFile(`${char.name}_${date}_chat`.replace(/[<>:"/\\|?*\.\,]/g, "") + '.json', stringl)
+            const extension = mode === '1' ? '.yaml' : '.json'
+            await downloadFile(`${char.name}_${date}_chat`.replace(/[<>:"/\\|?*\.\,]/g, "") + extension, stringl)
     
         }
-        else if(mode === '2'){
+        else if(mode === '3'){
 
             let chatContentHTML = ''
 
@@ -283,7 +288,7 @@ export async function exportChat(page:number){
 
             await downloadFile(`${char.name}_${date}_chat`.replace(/[<>:"/\\|?*\.\,]/g, "") + '.html', Buffer.from(doc, 'utf-8'))
         }
-        else if(mode === '3'){
+        else if(mode === '4'){
             //create a html table
             let chatContentHTML = ''
 
@@ -347,7 +352,7 @@ export async function exportChat(page:number){
 }
 
 export async function importChat(){
-    const dat =await selectSingleFile(['json','jsonl','txt','html'])
+    const dat =await selectSingleFile(['json','yaml','yml','jsonl','txt','html'])
     if(!dat){
         return
     }
@@ -397,8 +402,10 @@ export async function importChat(){
             changeChatTo(0)
             notifySuccess(language.successImport)
         }
-        else if(dat.name.endsWith('json')){
-            const json = JSON.parse(Buffer.from(dat.data).toString('utf-8'))
+        else if(dat.name.endsWith('json') || dat.name.endsWith('yaml') || dat.name.endsWith('yml')){
+            const json:any = dat.name.endsWith('json')
+                ? JSON.parse(Buffer.from(dat.data).toString('utf-8'))
+                : parseYaml(dat.data)
             if((json.type === 'risuAllChats' || json.type === 'risuChat') && json.ver === 2){
                 const folders = json.folders || []
                 const chats = Array.isArray(json.data) ? json.data : [json.data]
@@ -504,13 +511,18 @@ export async function exportAllChats() {
 
         const allChats = char.chats
         const allFolders = char.chatFolders
-        const stringl = Buffer.from(JSON.stringify({
+        const mode = await alertSelect(['Export as JSON', 'Export as YAML'])
+        const exportedChats = {
             type: 'risuAllChats',
             ver: 2,
             data: allChats,
             folders: allFolders
-        }), 'utf-8')
-        await downloadFile(`${char.name}_all_chats_${date}`.replace(/[<>:"/\\|?*.,]/g, "") + '.json', stringl)
+        }
+        const stringl = mode === '1'
+            ? stringifyYaml(exportedChats)
+            : Buffer.from(JSON.stringify(exportedChats), 'utf-8')
+        const extension = mode === '1' ? '.yaml' : '.json'
+        await downloadFile(`${char.name}_all_chats_${date}`.replace(/[<>:"/\\|?*.,]/g, "") + extension, stringl)
         notifySuccess(language.successExport)
     } catch (error) {
         alertError(error)
