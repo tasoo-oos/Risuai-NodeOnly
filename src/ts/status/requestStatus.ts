@@ -14,6 +14,7 @@ export type RequestPhase =
     | 'responding'   // receiving answer body
     | 'retrying'     // fallback / retry
     | 'stalled'      // chunks stopped arriving for a while
+    | 'background'   // server-side job reattached after reload; renders on completion (jobRecovery)
     | 'done' | 'failed' | 'aborted'
 
 // Request kind = the chip shown after the phase, so the toast says "what" the
@@ -38,7 +39,7 @@ export interface StatusBadge {
 
 export interface RequestStatusEntry {
     id: string                             // per-request key = generationId (issued upstream; we only consume)
-    chatId?: string
+    chatId?: string                        // real chat.id of the generating chat (absent for aux requests)
     kind: RequestKind                      // chip: main / translate / memory / emotion / sub
     label: string                          // model / preset name
     phase: RequestPhase
@@ -411,7 +412,10 @@ function tick(): void {
             // requests end via endStatus well before this; the fetch timeout
             // (localNetworkTimeoutSec, default 600s) fires the catch path first.
             const abandonAfterMs = e.abandonAfterMs ?? STATUS_ABANDON_MS
-            if (!isTerminalPhase(e.phase) && now - e.startedAt > abandonAfterMs) {
+            // 'background' entries are exempt: a reattached server-side job
+            // legitimately runs up to the 65-min poll deadline, and its poll
+            // loop always ends the entry itself (that deadline is their GC).
+            if (!isTerminalPhase(e.phase) && e.phase !== 'background' && now - e.startedAt > abandonAfterMs) {
                 changed = true
                 continue // omit from next → removed, timer can stop
             }
