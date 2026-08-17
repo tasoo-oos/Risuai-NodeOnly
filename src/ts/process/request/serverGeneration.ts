@@ -1,4 +1,4 @@
-import { createGenerationJob, streamGenerationJob, waitForGenerationJob } from '../../network/generationJobs'
+import { createGenerationJob, streamGenerationJob, waitForGenerationJob, type CompiledGenerationTransport } from '../../network/generationJobs'
 import { isNodeServer } from '../../platform'
 import { getCurrentCharacter, getCurrentChat } from '../../storage/database.svelte'
 import { LLMFormat } from '../../model/modellist'
@@ -23,6 +23,24 @@ export async function tryServerGenerationTransport(arg:RequestDataArgumentExtend
     const chatId = currentChat?.id ?? arg.chatId ?? `${characterId}_adhoc`
 
     if(arg.mode === 'model'){
+        const descriptor = getCompiledTransportDescriptor(format)
+        let compiledTransport:CompiledGenerationTransport|undefined
+        if(descriptor && !arg.multiGen && hasTrustedServerEndpoint(arg, format)){
+            const preview = await buildServerTransportPreview(arg, format)
+            if(preview?.type === 'success'){
+                const transport = parseTransportPreview(preview.result)
+                const model = arg.modelInfo?.internalID || arg.aiModel
+                if(transport && model){
+                    compiledTransport = {
+                        ...descriptor,
+                        model,
+                        body: transport.body,
+                        useStreaming: Boolean(arg.useStreaming),
+                    }
+                }
+            }
+        }
+
         const serverJob = await createGenerationJob({
             characterId,
             chatId,
@@ -31,6 +49,7 @@ export async function tryServerGenerationTransport(arg:RequestDataArgumentExtend
             continue: arg.continue,
             useStreaming: arg.useStreaming,
             mode: 'server',
+            compiledTransport,
             requestOptions: {
                 temperature: arg.temperature,
                 maxTokens: arg.maxTokens,
@@ -70,14 +89,9 @@ export async function tryServerGenerationTransport(arg:RequestDataArgumentExtend
         return null
     }
 
-    let transport:{url:string,body:any,headers:Record<string,string>}
-    try {
-        transport = JSON.parse(preview.result)
-    } catch (error) {
-        return {
-            type: 'fail',
-            result: `Failed to parse server transport preview: ${error}`
-        }
+    const transport = parseTransportPreview(preview.result)
+    if(!transport){
+        return null
     }
 
     const job = await createGenerationJob({
@@ -114,6 +128,51 @@ export async function tryServerGenerationTransport(arg:RequestDataArgumentExtend
         model: arg.aiModel,
         messageId: job.messageId ?? undefined,
         serverOwned: true,
+    }
+}
+
+function hasTrustedServerEndpoint(arg:RequestDataArgumentExtended, format:LLMFormat):boolean{
+    if(arg.modelInfo?.endpoint || arg.modelInfo?.keyIdentifier){
+        return false
+    }
+    if(arg.aiModel?.startsWith('xcustom:::')){
+        return format === LLMFormat.OpenAICompatible
+    }
+    if(arg.aiModel === 'reverse_proxy'){
+        return format === LLMFormat.OpenAICompatible
+            || format === LLMFormat.Anthropic
+            || format === LLMFormat.AnthropicLegacy
+    }
+    return true
+}
+
+function parseTransportPreview(result:string):{url:string,body:Record<string,any>,headers:Record<string,string>}|null{
+    try {
+        const transport = JSON.parse(result)
+        if(!transport || typeof transport.url !== 'string' || !transport.url
+            || !transport.body || typeof transport.body !== 'object' || Array.isArray(transport.body)
+            || !transport.headers || typeof transport.headers !== 'object' || Array.isArray(transport.headers)){
+            return null
+        }
+        return transport
+    } catch {
+        return null
+    }
+}
+
+function getCompiledTransportDescriptor(format:LLMFormat):Pick<CompiledGenerationTransport, 'provider'|'endpointKind'>|null{
+    switch(format){
+        case LLMFormat.OpenAICompatible:
+            return { provider: 'openai', endpointKind: 'chat-completions' }
+        case LLMFormat.Mistral:
+            return { provider: 'openai', endpointKind: 'mistral-chat' }
+        case LLMFormat.Anthropic:
+        case LLMFormat.AnthropicLegacy:
+            return { provider: 'anthropic', endpointKind: 'anthropic-messages' }
+        case LLMFormat.GoogleCloud:
+            return { provider: 'google', endpointKind: 'google-generate' }
+        default:
+            return null
     }
 }
 

@@ -10,6 +10,14 @@ export type GenerationTransportPayload = {
     useStreaming: boolean
 }
 
+export type CompiledGenerationTransport = {
+    provider: 'openai' | 'anthropic' | 'google'
+    endpointKind: 'chat-completions' | 'mistral-chat' | 'anthropic-messages' | 'google-generate'
+    model: string
+    body: Record<string, any>
+    useStreaming: boolean
+}
+
 export type CreateGenerationRequest = {
     characterId: string
     chatId: string
@@ -17,6 +25,7 @@ export type CreateGenerationRequest = {
     overrideModel?: string | null
     mode: 'transport' | 'server'
     transport?: GenerationTransportPayload
+    compiledTransport?: CompiledGenerationTransport
     useStreaming?: boolean
     continue?: boolean
     requestOptions?: Record<string, any>

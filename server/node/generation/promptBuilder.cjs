@@ -16,8 +16,8 @@ async function buildGenerationContext(db, command) {
         throw new Error(`Chat not found: ${command.chatId}`);
     }
 
-    const provider = detectProvider(command.overrideModel || db.aiModel || '');
-    const model = resolveModel(db, provider, command.overrideModel || db.aiModel || '');
+    const provider = command.compiledTransport?.provider || detectProvider(command.overrideModel || db.aiModel || '');
+    const model = resolveModel(db, provider, command.compiledTransport?.model || command.overrideModel || db.aiModel || '');
     const messages = buildMessages(db, character, chat, command);
     const { safeTools, unsupportedTools } = selectServerTools(command.requestOptions?.tools);
     const temperature = normalizeTemperature(command.requestOptions?.temperature, db.temperature);
@@ -27,6 +27,7 @@ async function buildGenerationContext(db, command) {
 
     return {
         provider,
+        endpointKind: command.compiledTransport?.endpointKind || null,
         model,
         character,
         chat,
@@ -36,6 +37,77 @@ async function buildGenerationContext(db, command) {
         tools: safeTools,
         unsupportedTools,
         useStreaming: command.useStreaming !== false && safeTools.length === 0,
+    };
+}
+
+function validateCompiledTransport(compiled) {
+    if (!compiled || typeof compiled !== 'object' || Array.isArray(compiled)) {
+        return 'compiledTransport must be an object';
+    }
+    const endpointProviders = {
+        'chat-completions': 'openai',
+        'mistral-chat': 'openai',
+        'anthropic-messages': 'anthropic',
+        'google-generate': 'google',
+    };
+    if (!Object.hasOwn(endpointProviders, compiled.endpointKind)
+        || endpointProviders[compiled.endpointKind] !== compiled.provider) {
+        return 'compiledTransport provider and endpointKind do not match';
+    }
+    if (typeof compiled.model !== 'string' || !compiled.model || compiled.model.length > 512
+        || (compiled.provider === 'google' && !/^[A-Za-z0-9._-]+$/.test(compiled.model))) {
+        return 'compiledTransport.model is invalid';
+    }
+    if (!compiled.body || typeof compiled.body !== 'object' || Array.isArray(compiled.body)) {
+        return 'compiledTransport.body must be an object';
+    }
+    if (typeof compiled.useStreaming !== 'boolean') {
+        return 'compiledTransport.useStreaming must be a boolean';
+    }
+    let bodySize;
+    try {
+        bodySize = Buffer.byteLength(JSON.stringify(compiled.body));
+    } catch {
+        return 'compiledTransport.body must be JSON serializable';
+    }
+    if (bodySize > 8 * 1024 * 1024) {
+        return 'compiledTransport.body exceeds the 8 MB limit';
+    }
+    return null;
+}
+
+function buildTransportFromCompiledRequest(db, context, compiled) {
+    const validationError = validateCompiledTransport(compiled);
+    if (validationError) {
+        throw new Error(validationError);
+    }
+    if (compiled.provider !== context.provider || compiled.endpointKind !== context.endpointKind) {
+        throw new Error('Compiled transport does not match the generation context');
+    }
+
+    const trustedTransport = buildTransportFromContext(db, context);
+    const body = { ...compiled.body };
+    if (compiled.provider === 'openai' || compiled.provider === 'anthropic') {
+        body.stream = context.useStreaming;
+    }
+    body.tools = compiled.provider === 'google' && context.tools?.length
+        ? {
+            functionDeclarations: context.tools.map((tool) => ({
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.inputSchema,
+            })),
+        }
+        : trustedTransport.body.tools;
+    if (context.unsupportedTools?.length) {
+        delete body.tool_choice;
+        delete body.parallel_tool_calls;
+    }
+
+    return {
+        ...trustedTransport,
+        body,
+        useStreaming: context.useStreaming,
     };
 }
 
@@ -145,7 +217,10 @@ function buildOpenAITransport(db, context) {
     let url = 'https://api.openai.com/v1/chat/completions';
     let apiKey = db.openAIKey || '';
 
-    if (String(db.aiModel).startsWith('openrouter')) {
+    if (context.endpointKind === 'mistral-chat') {
+        url = 'https://api.mistral.ai/v1/chat/completions';
+        apiKey = db.mistralKey || '';
+    } else if (String(db.aiModel).startsWith('openrouter')) {
         url = db.forceReplaceUrl || 'https://openrouter.ai/api/v1/chat/completions';
         apiKey = db.openrouterKey || '';
     } else if (db.aiModel === 'reverse_proxy' && db.forceReplaceUrl) {
@@ -299,4 +374,6 @@ function normalizeCompletionUrl(url, suffix) {
 module.exports = {
     buildGenerationContext,
     buildTransportFromContext,
+    buildTransportFromCompiledRequest,
+    validateCompiledTransport,
 };

@@ -4,6 +4,7 @@ const { createJob, getJob, getActiveJobs, getActiveJobForChat, cancelJob, JobCon
 const { startJob } = require('./service.cjs');
 const { createLogger } = require('./logger.cjs');
 const { sanitizeTransportForPersistence } = require('./transport.cjs');
+const { validateCompiledTransport } = require('./promptBuilder.cjs');
 
 const log = createLogger('Routes');
 
@@ -22,6 +23,18 @@ function setupGenerationRoutes({ app, authenticatedRouteLimiter, checkAuth, chec
             if (!characterId || !chatId) {
                 res.status(400).json({ error: 'characterId and chatId are required' });
                 return;
+            }
+
+            if (req.body?.compiledTransport && req.body?.mode !== 'server') {
+                res.status(400).json({ error: 'compiledTransport requires server mode' });
+                return;
+            }
+            if (req.body?.compiledTransport) {
+                const validationError = validateCompiledTransport(req.body.compiledTransport);
+                if (validationError) {
+                    res.status(400).json({ error: validationError });
+                    return;
+                }
             }
 
             const job = createJob({
@@ -127,6 +140,18 @@ function buildPersistedPayload(body) {
         return {
             ...body,
             transport: sanitizeTransportForPersistence(body.transport),
+        };
+    }
+    if (body.compiledTransport) {
+        return {
+            ...body,
+            compiledTransport: {
+                provider: body.compiledTransport.provider,
+                endpointKind: body.compiledTransport.endpointKind,
+                model: body.compiledTransport.model,
+                body: body.compiledTransport.body,
+                useStreaming: body.compiledTransport.useStreaming,
+            },
         };
     }
     return body;
