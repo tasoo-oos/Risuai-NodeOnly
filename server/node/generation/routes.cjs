@@ -149,12 +149,91 @@ function buildPersistedPayload(body) {
                 provider: body.compiledTransport.provider,
                 endpointKind: body.compiledTransport.endpointKind,
                 model: body.compiledTransport.model,
-                body: body.compiledTransport.body,
                 useStreaming: body.compiledTransport.useStreaming,
+                bodySummary: summarizeCompiledBody(body.compiledTransport.provider, body.compiledTransport.body),
             },
         };
     }
     return body;
+}
+
+function summarizeCompiledBody(provider, body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        return null;
+    }
+    let size;
+    try {
+        size = Buffer.byteLength(JSON.stringify(body));
+    } catch {
+        size = null;
+    }
+    const summary = {
+        size,
+        keys: Object.keys(body),
+    };
+    if (provider === 'google') {
+        const contents = Array.isArray(body.contents) ? body.contents : [];
+        let textChars = 0;
+        let imageCount = 0;
+        for (const content of contents) {
+            for (const part of content?.parts || []) {
+                if (typeof part?.text === 'string') {
+                    textChars += part.text.length;
+                }
+                if (part?.inlineData || part?.inline_data) {
+                    imageCount += 1;
+                }
+            }
+        }
+        for (const part of body.systemInstruction?.parts || []) {
+            if (typeof part?.text === 'string') {
+                textChars += part.text.length;
+            }
+        }
+        summary.messageCount = contents.length;
+        summary.textChars = textChars;
+        summary.imageCount = imageCount;
+        if (Array.isArray(body.tools)) {
+            summary.toolCount = (body.tools[0]?.functionDeclarations || []).length;
+        }
+    } else {
+        const messages = Array.isArray(body.messages) ? body.messages : [];
+        let textChars = 0;
+        let imageCount = 0;
+        for (const message of messages) {
+            const content = message?.content;
+            if (typeof content === 'string') {
+                textChars += content.length;
+            } else if (Array.isArray(content)) {
+                for (const block of content) {
+                    if (typeof block?.text === 'string') {
+                        textChars += block.text.length;
+                    }
+                    if (block?.type === 'image' || block?.type === 'image_url') {
+                        imageCount += 1;
+                    }
+                }
+            }
+        }
+        if (typeof body.system === 'string') {
+            textChars += body.system.length;
+        }
+        summary.messageCount = messages.length;
+        summary.textChars = textChars;
+        summary.imageCount = imageCount;
+        if (Array.isArray(body.tools)) {
+            summary.toolNames = body.tools
+                .map((tool) => tool?.function?.name || tool?.name)
+                .filter((name) => typeof name === 'string');
+        }
+    }
+    if (typeof body.max_tokens === 'number') {
+        summary.maxTokens = body.max_tokens;
+    }
+    if (typeof body.temperature === 'number') {
+        summary.temperature = body.temperature;
+    }
+    return summary;
 }
 
 function normalizeString(value) {
@@ -174,4 +253,6 @@ function normalizeNullableSession(value) {
 
 module.exports = {
     setupGenerationRoutes,
+    buildPersistedPayload,
+    summarizeCompiledBody,
 };

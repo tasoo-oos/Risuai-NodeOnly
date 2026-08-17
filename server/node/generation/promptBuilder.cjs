@@ -91,17 +91,25 @@ function buildTransportFromCompiledRequest(db, context, compiled) {
         body.stream = context.useStreaming;
     }
     body.tools = compiled.provider === 'google' && context.tools?.length
-        ? {
+        ? [{
             functionDeclarations: context.tools.map((tool) => ({
                 name: tool.name,
                 description: tool.description,
                 parameters: tool.inputSchema,
             })),
-        }
+        }]
         : trustedTransport.body.tools;
     if (context.unsupportedTools?.length) {
         delete body.tool_choice;
         delete body.parallel_tool_calls;
+    }
+    if (compiled.provider === 'anthropic') {
+        const betaHeader = anthropicBetaHeaderValue(db, body.max_tokens);
+        if (betaHeader) {
+            trustedTransport.headers['anthropic-beta'] = betaHeader;
+        } else {
+            delete trustedTransport.headers['anthropic-beta'];
+        }
     }
 
     return {
@@ -281,6 +289,7 @@ function buildAnthropicTransport(db, context) {
         messages.push({ role: 'user', content: 'Start' });
     }
 
+    const betaHeader = anthropicBetaHeaderValue(db, context.maxTokens);
     return {
         provider: 'anthropic',
         url,
@@ -292,6 +301,7 @@ function buildAnthropicTransport(db, context) {
             'anthropic-version': '2023-06-01',
             'Content-Type': 'application/json',
             'accept': 'application/json',
+            ...(betaHeader ? { 'anthropic-beta': betaHeader } : {}),
         },
         body: {
             model: context.model,
@@ -353,6 +363,17 @@ function buildGoogleTransport(db, context) {
             },
         },
     };
+}
+
+function anthropicBetaHeaderValue(db, maxTokens) {
+    const betas = [];
+    if (Number.isFinite(maxTokens) && maxTokens > 8192) {
+        betas.push('output-128k-2025-02-19');
+    }
+    if (db.claude1HourCaching) {
+        betas.push('extended-cache-ttl-2025-04-11');
+    }
+    return betas.length > 0 ? betas.join(',') : null;
 }
 
 function normalizeCompletionUrl(url, suffix) {

@@ -91,7 +91,10 @@ export async function tryServerGenerationTransport(arg:RequestDataArgumentExtend
 
     const transport = parseTransportPreview(preview.result)
     if(!transport){
-        return null
+        return {
+            type: 'fail',
+            result: 'Failed to parse server transport preview',
+        }
     }
 
     const job = await createGenerationJob({
