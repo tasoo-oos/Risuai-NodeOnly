@@ -51,6 +51,7 @@ import { DEFAULT_ANTHROPIC_BATCH_TIMEOUT_MS, previewAnthropicBatchRequest, submi
 import { ANTHROPIC_BATCH_STATUS_ABANDON_GRACE_MS, wrapAnthropicBatchStatusJob } from './anthropicBatchStatusJob';
 import { safeStatus } from './safeStatus';
 import { requestStatusText } from './requestStatusText';
+import { tryServerGenerationTransport } from './serverGeneration';
 
 export type ToolCall = {
     name: string;
@@ -127,6 +128,8 @@ export type requestDataResponse = {
     failByServerError?: boolean
     model?: string
     modelId?: string
+    messageId?: string
+    serverOwned?: boolean
 }|{
     type: "streaming",
     result: ReadableStream<StreamResponseChunk>,
@@ -135,6 +138,8 @@ export type requestDataResponse = {
     }
     model?: string
     modelId?: string
+    messageId?: string
+    serverOwned?: boolean
 }|{
     type: "job",
     job: ProviderRequestJob,
@@ -142,6 +147,7 @@ export type requestDataResponse = {
         emotion?: string
     }
     model?: string
+    modelId?: string
 }|{
     type: "multiline",
     result: ['user'|'char',string][],
@@ -527,6 +533,11 @@ export async function requestChatDataMain(arg:requestDataArgument, model:ModelMo
     const format = targ.modelInfo.format
 
     targ.formated = reformater(targ.formated, targ.modelInfo)
+
+    const serverTransportResult = await tryServerGenerationTransport(targ, format)
+    if(serverTransportResult){
+        return serverTransportResult
+    }
 
     switch(format){
         case LLMFormat.OpenAICompatible:
@@ -1479,6 +1490,7 @@ async function executeModelPresetTool(
         return { text: 'Tool call failed: ' + (e instanceof Error ? e.message : String(e)), response: [] }
     }
 }
+
 
 
 async function requestNovelAI(arg:RequestDataArgumentExtended):Promise<requestDataResponse>{

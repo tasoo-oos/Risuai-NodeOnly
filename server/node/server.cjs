@@ -36,6 +36,9 @@ const { decodeRisuSave, encodeRisuSaveLegacy, calculateHash, normalizeJSON, norm
 const { spawn, execSync } = require('child_process');
 const os = require('os');
 const { Readable, Transform } = require('stream');
+const generationJobs = require('./generation/jobs.cjs');
+const { setupGenerationRoutes } = require('./generation/routes.cjs');
+const { setupGenerationWebSocket } = require('./generation/ws.cjs');
 
 // Install process-level error handlers before any other init so early crashes get logged.
 installProcessHandlers();
@@ -1480,6 +1483,22 @@ const PROXY_STREAM_MAX_PENDING_BYTES = 2 * 1024 * 1024;
 const PROXY_STREAM_MAX_BODY_BASE64_BYTES = 8 * 1024 * 1024;
 const proxyStreamJobs = new Map();
 
+generationJobs.init(sqliteDb);
+
+const authenticatedRouteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 90,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please retry shortly.' }
+});
+const authRouteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 90,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please retry shortly.' }
+});
 const loginRouteLimiter = rateLimit({
     windowMs: 30 * 1000,
     max: 10,
@@ -1854,7 +1873,6 @@ function setupProxyStreamWebSocket(server) {
         try {
             const reqUrl = new URL(req.url, `http://${req.headers.host}`);
             if (!reqUrl.pathname.startsWith('/proxy-stream-jobs/') || !reqUrl.pathname.endsWith('/ws')) {
-                socket.destroy();
                 return;
             }
 
@@ -2959,6 +2977,13 @@ app.delete('/proxy-stream-jobs/:jobId', async (req, res) => {
 const { createModelJobs } = require('./model-jobs.cjs');
 const modelJobs = createModelJobs({ saveDir: savePath, logger });
 modelJobs.registerRoutes(app, { auth: checkProxyAuth });
+
+setupGenerationRoutes({
+    app,
+    authenticatedRouteLimiter,
+    checkAuth,
+    checkActiveSession,
+});
 
 // app.get('/api/password', async(req, res)=> {
 //     if(password === ''){
@@ -6394,6 +6419,7 @@ async function startServer() {
             // HTTPS
             server = https.createServer(httpsOptions, app);
             setupProxyStreamWebSocket(server);
+            setupGenerationWebSocket(server, { checkAuthorizedRequest: isAuthorizedProxyRequest });
             server.listen(port, () => {
                 console.log("[Server] HTTPS server is running.");
                 console.log(`[Server] https://localhost:${port}/`);
@@ -6402,6 +6428,7 @@ async function startServer() {
             // HTTP
             server = http.createServer(app);
             setupProxyStreamWebSocket(server);
+            setupGenerationWebSocket(server, { checkAuthorizedRequest: isAuthorizedProxyRequest });
             server.listen(port, () => {
                 console.log("[Server] HTTP server is running.");
                 console.log(`[Server] http://localhost:${port}/`);
@@ -6440,6 +6467,7 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
                 cleanupJob(jobId);
             }
         }
+        generationJobs.runGarbageCollection();
     }, PROXY_STREAM_GC_INTERVAL_MS);
 
     await startServer();
