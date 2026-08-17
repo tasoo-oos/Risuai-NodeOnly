@@ -156,6 +156,8 @@ export type requestDataResponse = {
     }
     model?: string
     modelId?: string
+    messageId?: string
+    serverOwned?: boolean
 }
 
 export interface StreamResponseChunk{[key:string]:string}

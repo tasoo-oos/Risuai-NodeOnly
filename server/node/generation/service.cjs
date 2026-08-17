@@ -14,7 +14,7 @@ const { createLogger } = require('./logger.cjs');
 const { runTransport } = require('./transport.cjs');
 const { loadCanonicalDatabase } = require('./database.cjs');
 const { prepareServerMessage, updateServerMessage, markServerMessageTerminal } = require('./dbWriter.cjs');
-const { buildGenerationContext, buildTransportFromContext } = require('./promptBuilder.cjs');
+const { buildGenerationContext, buildTransportFromContext, buildTransportFromCompiledRequest } = require('./promptBuilder.cjs');
 
 const log = createLogger('Service');
 
@@ -117,7 +117,9 @@ async function serverRunner(job, command) {
     if ((command?.useStreaming !== false) && !context.useStreaming && context.tools?.length) {
         emitProviderWarning(job.id, 'Streaming disabled because server tool execution uses non-streaming follow-up requests');
     }
-    const transport = buildTransportFromContext(db, context);
+    const transport = command.compiledTransport
+        ? buildTransportFromCompiledRequest(db, context, command.compiledTransport)
+        : buildTransportFromContext(db, context);
     await runTransport(job, transport);
 }
 

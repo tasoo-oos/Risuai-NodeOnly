@@ -29,6 +29,7 @@ import { getModuleAssets, getModuleToggles } from "./modules";
 import { readImage } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
+import type { ProviderJobResult } from "./request/providerJob";
 
 export interface OpenAIChat{
     role: 'system'|'user'|'assistant'|'function'

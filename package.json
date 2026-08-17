@@ -16,6 +16,7 @@
     "test": "vitest run && vitest run --config vitest.config.server.ts",
     "test:compat": "vitest run --config vitest.config.compat.ts",
     "test:server": "vitest run --config vitest.config.server.ts",
+    "test:generation": "node --test server/node/generation/*.node-test.cjs",
     "runserver": "node server/node/server.cjs",
     "hono:build": "vite build --sourcemap && node server/hono/src/utils/postbuild.js"
   },
