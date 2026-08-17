@@ -25,6 +25,10 @@ function setupGenerationRoutes({ app, authenticatedRouteLimiter, checkAuth, chec
                 return;
             }
 
+            if (req.body?.transport && req.body?.compiledTransport) {
+                res.status(400).json({ error: 'transport and compiledTransport are mutually exclusive' });
+                return;
+            }
             if (req.body?.compiledTransport && req.body?.mode !== 'server') {
                 res.status(400).json({ error: 'compiledTransport requires server mode' });
                 return;
@@ -136,25 +140,23 @@ function buildPersistedPayload(body) {
     if (!body || typeof body !== 'object') {
         return null;
     }
+    if (!body.transport && !body.compiledTransport) {
+        return body;
+    }
+    const persisted = { ...body };
     if (body.transport) {
-        return {
-            ...body,
-            transport: sanitizeTransportForPersistence(body.transport),
-        };
+        persisted.transport = sanitizeTransportForPersistence(body.transport);
     }
     if (body.compiledTransport) {
-        return {
-            ...body,
-            compiledTransport: {
-                provider: body.compiledTransport.provider,
-                endpointKind: body.compiledTransport.endpointKind,
-                model: body.compiledTransport.model,
-                useStreaming: body.compiledTransport.useStreaming,
-                bodySummary: summarizeCompiledBody(body.compiledTransport.provider, body.compiledTransport.body),
-            },
+        persisted.compiledTransport = {
+            provider: body.compiledTransport.provider,
+            endpointKind: body.compiledTransport.endpointKind,
+            model: body.compiledTransport.model,
+            useStreaming: body.compiledTransport.useStreaming,
+            bodySummary: summarizeCompiledBody(body.compiledTransport.provider, body.compiledTransport.body),
         };
     }
-    return body;
+    return persisted;
 }
 
 function summarizeCompiledBody(provider, body) {

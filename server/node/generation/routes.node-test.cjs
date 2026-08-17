@@ -2,7 +2,59 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { buildPersistedPayload, summarizeCompiledBody } = require('./routes.cjs');
+const { setupGenerationRoutes, buildPersistedPayload, summarizeCompiledBody } = require('./routes.cjs');
+
+test('generation route rejects transport and compiledTransport together', async () => {
+    let createGenerationHandler;
+    const app = {
+        post(path, ...handlers) {
+            if (path === '/api/generations') {
+                createGenerationHandler = handlers.at(-1);
+            }
+        },
+        get() {},
+    };
+    setupGenerationRoutes({
+        app,
+        authenticatedRouteLimiter: (_req, _res, next) => next(),
+        checkAuth: async () => true,
+        checkActiveSession: () => true,
+    });
+    const response = {
+        statusCode: 200,
+        payload: null,
+        status(code) {
+            this.statusCode = code;
+            return this;
+        },
+        json(payload) {
+            this.payload = payload;
+            return this;
+        },
+    };
+
+    await createGenerationHandler({
+        body: {
+            characterId: 'char1',
+            chatId: 'chat1',
+            mode: 'server',
+            transport: { provider: 'openai', body: {} },
+            compiledTransport: {
+                provider: 'openai',
+                endpointKind: 'chat-completions',
+                model: 'gpt-4o-mini',
+                body: { messages: [] },
+                useStreaming: false,
+            },
+        },
+        headers: {},
+    }, response);
+
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.payload, {
+        error: 'transport and compiledTransport are mutually exclusive',
+    });
+});
 
 test('persisted compiled payload stores metadata instead of the full body', () => {
     const bigImage = 'A'.repeat(100000);
@@ -143,4 +195,32 @@ test('persisted transport payload keeps its existing sanitized shape', () => {
     assert.equal(persisted.transport.headers.Authorization, '***REDACTED***');
     assert.equal(persisted.transport.headers['Content-Type'], 'application/json');
     assert.deepEqual(persisted.transport.body, { messages: [{ role: 'user', content: 'hi' }] });
+});
+
+test('persisted payload sanitizes both transport fields defensively', () => {
+    const secretPrompt = 'private compiled prompt';
+    const request = {
+        mode: 'server',
+        transport: {
+            provider: 'openai',
+            url: 'https://api.openai.com/v1/chat/completions',
+            body: {},
+            headers: { Authorization: 'Bearer secret' },
+        },
+        compiledTransport: {
+            provider: 'openai',
+            endpointKind: 'chat-completions',
+            model: 'gpt-4o-mini',
+            body: { messages: [{ role: 'user', content: secretPrompt }] },
+            useStreaming: false,
+        },
+    };
+
+    const persisted = buildPersistedPayload(request);
+    const serialized = JSON.stringify(persisted);
+
+    assert.equal(persisted.transport.headers.Authorization, '***REDACTED***');
+    assert.equal(persisted.compiledTransport.body, undefined);
+    assert.equal(persisted.compiledTransport.bodySummary.messageCount, 1);
+    assert.ok(!serialized.includes(secretPrompt));
 });
