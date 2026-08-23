@@ -36,6 +36,7 @@ export const languageEnglish = {
         requestLogRemovedDesc: "This request log removes when client is refreshed or reloaded.",
         persistFailureTitle: "Server save failed — changes are not being written to disk",
         persistFailureAttemptedSize: "attempted size",
+        storageRequestTooLarge: "Save request failed because it is too large (HTTP 413). Check the request body size limit on the server or reverse proxy (Nginx, etc.).",
         chatGuardTitle: "Chat data guard triggered — switched to safe save mode",
         chatGuardDesc: "Suspicious save patterns blocked. Your changes will be persisted via the safe full-write fallback. If this keeps happening, please report it with browser console logs.",
         chatGuardPersistTitle: "Save aborted to protect existing chat data",
@@ -992,6 +993,7 @@ export const languageEnglish = {
     persistentStorageSuccess: "Storage is successfully persisted",
     persistentStorageFail: "Storage is not persisted. Did you deny the request?, or is the browser not supported?",
     persistentStorageRecommended: "Persistent Storage Recommended",
+    unsupportedFileType: "Unsupported file type",
     persistentStorageDesc: "Your browser supports persistent storage. this is recommended for better performance and user experience.",
     enable: "Enable",
     postFile: "Post File",
@@ -1558,6 +1560,7 @@ export const languageEnglish = {
     folderNameInput: "Please input the new folder name",
     folderRemoveLengthError: "To remove a folder, it must not contain any entries.",
     personaNote: "Persona Note",
+    personaDuplicate: "Duplicate",
     mcpAccessPrompt: '{{tool}} is trying to "{{action}}". do you want to allow this?',
     rememberToolUsage: "Remember tool usage",
     simplifiedToolUse: "Simplified tool usage",
@@ -1644,6 +1647,7 @@ export const languageEnglish = {
     replacerPermissionConsent: "Plugin {} is requesting permission to replace content in the chat, which may be used to manipulate the conversation. Do you want to allow this?",
     providerPermissionConsent: "Plugin {} is requesting permission to access the provider, which may allow it to make unauthorized API calls. Do you want to allow this?",
     sendChatConsent: "Plugin {} is requesting permission to send chat messages on your behalf, which will trigger AI responses. Do you want to allow this?",
+    pluginPermissionDenyGuide: "Permission request from plugin \"{}\" was denied. Denied permissions will not be asked again.\n\nIf this was a mistake, you can undo it with \"Reset permission responses\" for this plugin in [Settings] > [Plugins].",
     resetPluginPermission: "Reset permission responses",
     resetPluginPermissionConfirm: "Clear all saved permission responses (granted / denied history) for plugin \"{}\"?\n\nThe plugin will be asked again the next time it requests permission.",
     resetPluginPermissionDone: "Permission responses for \"{}\" have been reset",
@@ -2055,6 +2059,26 @@ export const languageEnglish = {
     storageOptimizeFailed: "Cleanup failed",
 
     storageCleanup: "Clean up SQLite overhead",
+
+    storageOrphan: "Orphan media",
+    storageOrphanHeader: (count: number, size: number) =>
+        `${count} files · ${(size / 1024 / 1024).toFixed(1)} MB`,
+    storageOrphanWhat:
+        "Image files no character, module or persona refers to. They are left behind when you delete a character or replace an asset.",
+    storageOrphanWhen:
+        "Deleted files cannot be recovered — make a backup first if anything here matters. After purging, run \"Clean up SQLite overhead\" above to actually shrink the file.",
+    storageOrphanUnavailable:
+        "Not scannable yet. Refresh once the database has been loaded into server memory.",
+    storageOrphanPurge: "Purge orphan media",
+    storageOrphanPurging: "Purging orphan media...",
+    storageOrphanConfirm: (count: number, size: number) =>
+        `Delete ${count} unreferenced media file(s) (${(size / 1024 / 1024).toFixed(1)} MB)? This cannot be undone.`,
+    storageOrphanDone: (count: number, size: number) =>
+        `Deleted ${count} file(s) (${(size / 1024 / 1024).toFixed(1)} MB).`,
+    storageOrphanFailed: "Orphan media purge failed",
+    storageOrphanAutoClean: "Auto-purge on boot",
+    storageOrphanAutoCleanDesc:
+        "Delete orphan media every time the app opens. Off by default — it can also delete references the scanner does not know about yet, so manual purging is safer.",
 
     storageWalCleanup: "Manual WAL cleanup",
     storageWalCleanupHeader: (walSize: number) => `Current WAL ${(walSize / 1024 / 1024).toFixed(1)} MB`,

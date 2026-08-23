@@ -34,6 +34,16 @@ import {
 
 export const forageStorage = new AutoStorage()
 
+function errorMessage(error: unknown): string {
+    if (error instanceof Error && error.message) return error.message
+    if (typeof error === 'string') return error
+    try {
+        return JSON.stringify(error) ?? String(error)
+    } catch {
+        return String(error)
+    }
+}
+
 export async function downloadFile(name: string, dat: Uint8Array | ArrayBuffer | string) {
     if (typeof (dat) === 'string') {
         dat = Buffer.from(dat, 'utf-8')
@@ -830,7 +840,7 @@ export async function saveDb() {
         }
 
         // ── Save changed chat content to server ─────────────────────────
-        const failedChats: [string, string][] = []
+        const failedChats: { chaId: string, chatId: string, message: string }[] = []
         for (const [chaId, chatId] of collectChatsToPersist(db, toSave)) {
             const char = db.characters.find(c => c.chaId === chaId)
             if (!char) continue
@@ -843,11 +853,13 @@ export async function saveDb() {
                 await saveChatToServer(chaId, chatIndex, chatId, chat)
             } catch (e) {
                 console.error(`[Save] Failed to save chat ${chaId}/${chatId}:`, e)
-                failedChats.push([chaId, chatId])
+                failedChats.push({ chaId, chatId, message: errorMessage(e) })
             }
         }
         if (failedChats.length > 0) {
-            throw new Error(`Failed to save ${failedChats.length} chat${failedChats.length === 1 ? '' : 's'}`)
+            throw new Error(
+                `Failed to save ${failedChats.length} chat${failedChats.length === 1 ? '' : 's'}: ${failedChats[0].message}`
+            )
         }
 
         // ── database.bin: exclude chat payload (stubs only via encoder) ──
@@ -1488,8 +1500,30 @@ export function getBasename(data: string) {
 }
 
 /**
+ * Extracts "assets/..." path references from an arbitrary value. Non-string
+ * values are serialized first so references nested inside plugin-stored JSON
+ * (objects, arrays) are found too.
+ *
+ * @param {unknown} value - The value to scan.
+ * @returns {string[]} - The asset paths found in the value.
+ */
+export function extractAssetRefs(value: unknown): string[] {
+    let text: string;
+    if (typeof value === 'string') {
+        text = value;
+    } else {
+        try {
+            text = JSON.stringify(value) ?? '';
+        } catch {
+            return [];
+        }
+    }
+    return Array.from(text.matchAll(/assets[/\\][\w-]+\.\w+/g), (m) => m[0]);
+}
+
+/**
  * Retrieves uncleanable resources from the database.
- * 
+ *
  * @param {Database} db - The database to retrieve uncleanable resources from.
  * @param {'basename'|'pure'} [uptype='basename'] - The type of uncleanable resources to retrieve.
  * @returns {string[]} - An array of uncleanable resources.
@@ -1524,6 +1558,11 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
             addUncleanable(s.path);
         }
     }
+    // Image-gen reference images hang off settings, not off a character. Missing
+    // them here meant cleanChunks deleted an asset the app still points at.
+    addUncleanable(db.NAIImgConfig?.character_image);
+    addUncleanable(db.NAIImgConfig?.image);
+    addUncleanable(db.wavespeedImage?.reference_image);
 
     for (const cha of db.characters) {
         if (cha.image) {
@@ -1551,6 +1590,9 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
                 addUncleanable(asset.uri);
             }
         }
+        // GPT-SoVITS reference audio is uploaded via saveAsset and read back on
+        // every TTS run — assetId holds the full "assets/..." path.
+        addUncleanable(cha.gptSoVitsConfig?.ref_audio_data?.assetId);
     }
 
     if (db.modules) {
@@ -1570,6 +1612,11 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
     if (db.personas) {
         db.personas.map((v) => {
             addUncleanable(v.icon);
+            // Legacy field: personas imported from character cards in older
+            // versions kept an `image` alongside `icon`. Nothing reads it today,
+            // but it is a live asset reference — omitting it here deleted the
+            // asset for good.
+            addUncleanable((v as unknown as { image?: string }).image);
 
             if(v.embeddedModule){
                 const assets = v.embeddedModule.assets
@@ -1591,6 +1638,17 @@ export function getUncleanables(db: Database, uptype: 'basename' | 'pure' = 'bas
                 addUncleanable(item.imgFile);
             }
         })
+    }
+
+    // Plugins can persist asset paths (from risuai.saveAsset) anywhere inside
+    // their storage — as plain strings or nested in JSON values — so scan the
+    // serialized text for "assets/..." references instead of assuming a structure.
+    if (db.pluginCustomStorage) {
+        for (const value of Object.values(db.pluginCustomStorage)) {
+            for (const ref of extractAssetRefs(value)) {
+                addUncleanable(ref);
+            }
+        }
     }
     return Array.from(uncleanable);
 }

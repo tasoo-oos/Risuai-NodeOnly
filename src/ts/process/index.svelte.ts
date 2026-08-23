@@ -26,7 +26,7 @@ import { getModelInfo, LLMFlags } from "../model/modellist";
 import { resolveChatModelBinding, resolvePresetMaxOutputTokens, presetSupportsVision } from "./request/modelPresetBinding";
 import { hypaMemoryV3 } from "./memory/hypav3";
 import { getModuleAssets, getModuleToggles } from "./modules";
-import { readImage } from "../globalApi.svelte";
+import { forageStorage, readImage } from "../globalApi.svelte";
 import { chatGenKey, chatProcessStage, endGeneration, isChatGenerating, setGenerationStage, startGeneration } from "./generationState";
 import { clearPendingSend, registerPendingSend } from "./request/pendingSends";
 import type { ProviderJobResult } from "./request/providerJob";
@@ -56,6 +56,11 @@ export interface requestTokenPart{
 }
 
 export { doingChat, chatProcessStage } from "./generationState"
+
+// 403 (not loopback) and 503 (not a Termux environment) cannot change within
+// a session, so remember the verdict instead of probing on every response.
+let termuxNotifyUnavailable = false
+
 export let requestTokenParts:{[key:string]:requestTokenPart[]} = {}
 export let previewFormated:OpenAIChat[] = []
 export let previewBody:string = ''
@@ -67,10 +72,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     usedContinueTokens?:number,
     preview?:boolean
     previewPrompt?:boolean
+    responseStartedAt?:number
 } = {}):Promise<boolean> {
 
     chatProcessStage.set(0)
     const abortSignal = arg.signal ?? (new AbortController()).signal
+    const responseStartedAt = arg.responseStartedAt ?? performance.now()
     
     // NOTE: `throwError()` can be called before these are populated (e.g. HypaV3 early validation errors).
     // Keep them declared up-front to avoid TDZ ReferenceErrors in production builds.
@@ -1471,7 +1478,10 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
     console.log(req)
     if(req.model){
-        generationInfo.model = getGenerationModelString(req.model)
+        // Preset requests carry a user-facing label; the wire model id then
+        // moves to generationInfo.modelId so both survive on the message.
+        generationInfo.model = req.modelLabel ?? getGenerationModelString(req.model)
+        if(req.modelLabel) generationInfo.modelId = req.model
         console.log(generationInfo.model, req.model)
     }
     if(req.modelId) generationInfo.modelId = req.modelId
@@ -1855,6 +1865,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     if(needsAutoContinue){
         endGeneration(genKey, { keepPendingAbort: true })
         return await sendChat(chatProcessIndex, {
+            responseStartedAt,
             chatAdditonalTokens: arg.chatAdditonalTokens,
             continue: true,
             signal: abortSignal,
@@ -1899,24 +1910,55 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         
         endGeneration(genKey, { keepPendingAbort: true })
         return await sendChat(chatProcessIndex, {
+            responseStartedAt,
             signal: abortSignal
         })
     }
 
     if(DBState.db.notification){
-        try {
-            const permission = await Notification.requestPermission()
-            if(permission === 'granted'){
-                const noti = new Notification('Risuai', {
-                    body: result
-                })
-                noti.onclick = () => {
-                    window.focus()
-                }
+        void (async () => {
+            let termuxNotified = false
+
+            if(!termuxNotifyUnavailable){
+                try {
+                    const elapsedMs = performance.now() - responseStartedAt
+                    const response = await fetch('/api/termux-notify', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'risu-auth': await forageStorage.createAuth()
+                        },
+                        body: JSON.stringify({
+                            elapsedMs,
+                            character: currentChar?.name ?? ''
+                        })
+                    })
+
+                    if(response.status === 403 || response.status === 503){
+                        termuxNotifyUnavailable = true
+                    }
+                    termuxNotified = response.ok
+                } catch {}
             }
-        } catch (error) {
-            
-        }
+
+            if(termuxNotified){
+                return
+            }
+
+            try {
+                const permission = await Notification.requestPermission()
+                if(permission === 'granted'){
+                    const noti = new Notification('Risuai', {
+                        body: result
+                    })
+                    noti.onclick = () => {
+                        window.focus()
+                    }
+                }
+            } catch (error) {
+
+            }
+        })()
     }
 
     if(req.special){

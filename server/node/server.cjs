@@ -24,7 +24,7 @@ const getVips = () => {
     return _vipsPromise
 }
 const { kvGet, kvSet, kvDel, kvList,
-        kvDelPrefix, kvListWithSizes, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities, checkpointWal,
+        kvDelPrefix, kvListWithSizes, kvListWithSizesAndUpdatedAt, kvSize, kvGetUpdatedAt, kvCopyValue, clearEntities, checkpointWal,
         gcChunks, reclaimableChunkBytes, isDbBlobChunked, snapshotFootprint, db: sqliteDb } = require('./db.cjs');
 const {
     addLogBatch, queryLogs, clearLogs, countLogs,
@@ -767,6 +767,91 @@ app.use('/assets', express.static(path.join(process.cwd(), 'dist/assets'), {
 }));
 app.use(express.static(path.join(process.cwd(), 'dist'), {index: false, maxAge: 0}));
 app.use(express.json({ limit: '100mb' }));
+
+// PocketRisu -> Termux native Android notification
+app.post('/api/termux-notify', async (req, res) => {
+    if (!await checkAuth(req, res)) return;
+
+    // A request relayed through a local reverse proxy arrives with a loopback
+    // remoteAddress even when the browser is remote, so any forwarded request
+    // counts as non-local.
+    const addr = String(req.socket.remoteAddress || '');
+    const isLoopback =
+        !req.headers['x-forwarded-for'] && (
+            addr === '127.0.0.1' ||
+            addr === '::1' ||
+            addr === '::ffff:127.0.0.1'
+        );
+
+    if (!isLoopback) {
+        return res.status(403).json({ error: 'localhost only' });
+    }
+
+    const prefix = process.env.PREFIX;
+
+    if (!prefix) {
+        return res.status(503).json({
+            error: 'Termux environment not available'
+        });
+    }
+
+    const bin = path.join(prefix, 'bin', 'termux-notification');
+
+    if (!existsSync(bin)) {
+        return res.status(503).json({
+            error: 'termux-notification not installed'
+        });
+    }
+
+    const elapsedMs = Number(req.body?.elapsedMs);
+
+    const elapsedText = Number.isFinite(elapsedMs)
+        ? `${(elapsedMs / 1000).toFixed(1)}s`
+        : 'time unavailable';
+
+    const character =
+        typeof req.body?.character === 'string'
+            ? req.body.character.trim().slice(0, 80)
+            : '';
+
+    const title = character
+        ? `PocketRisu · ${character}`
+        : 'PocketRisu';
+
+    // Reuse one notification slot so repeated responses do not stack.
+    const child = spawn(bin, [
+        '--id', '8472',
+        '--title', title,
+        '--content', `Response complete · ${elapsedText}`,
+        '--priority', 'high',
+        '--sound'
+    ], {
+        stdio: 'ignore'
+    });
+
+    let replied = false;
+
+    child.once('error', (error) => {
+        console.error('[TermuxNotify]', error);
+
+        if (!replied) {
+            replied = true;
+            res.status(500).json({
+                error: 'notification failed'
+            });
+        }
+    });
+
+    child.once('close', (code) => {
+        if (!replied) {
+            replied = true;
+            res.status(code === 0 ? 200 : 500).json({
+                ok: code === 0
+            });
+        }
+    });
+});
+
 app.use((req, res, next) => {
     // Skip express.raw() for backup import — it must stream, not buffer into memory
     if (req.path === '/api/backup/import') return next();
@@ -3383,6 +3468,9 @@ app.get('/api/remove', async (req, res, next) => {
     }
     try {
         const key = Buffer.from(filePath, 'hex').toString('utf-8');
+        if (key.startsWith('assets/') || key.startsWith('remotes/')) {
+            return res.status(409).send({ error: 'asset removal must go through server-side cleanup' });
+        }
         if (key.startsWith('inlay/')) {
             const id = key.slice('inlay/'.length)
             await deleteInlayFile(id)
@@ -3661,6 +3749,9 @@ app.post('/api/patch', async (req, res, next) => {
         return;
     }
 
+    // Which step of the patch flow was running when the outer catch fired —
+    // without it a bare error name (e.g. RangeError) is undiagnosable.
+    let patchStage = 'load';
     try {
         await queueStorageOperation(async () => {
             const decodedKey = Buffer.from(filePath, 'hex').toString('utf-8');
@@ -3717,14 +3808,18 @@ app.post('/api/patch', async (req, res, next) => {
                 return;
             }
 
+            patchStage = 'hash';
             const serverHash = calculateHash(dbCache[filePath]).toString(16);
 
             if (expectedHash !== serverHash) {
                 console.log(`[Patch] Hash mismatch for ${decodedKey}: expected=${expectedHash}, server=${serverHash}`);
                 let currentEtag = undefined;
                 if (decodedKey === 'database/database.bin') {
-                    currentEtag = computeBufferEtag(Buffer.from(encodeRisuSaveLegacy(dbCache[filePath])));
-                    dbEtag = currentEtag;
+                    // Encode failure must not upgrade this 409 into a 500.
+                    try {
+                        currentEtag = computeBufferEtag(Buffer.from(encodeRisuSaveLegacy(dbCache[filePath])));
+                        dbEtag = currentEtag;
+                    } catch {}
                 }
                 res.status(409).send({
                     error: 'Hash mismatch - data out of sync',
@@ -3733,8 +3828,15 @@ app.post('/api/patch', async (req, res, next) => {
                 return;
             }
 
-            // Apply patch to in-memory database (clone first to prevent partial mutation on failure)
-            const snapshot = JSON.parse(JSON.stringify(dbCache[filePath]));
+            // Apply patch to in-memory database (clone first to prevent partial
+            // mutation on failure). structuredClone instead of a JSON round-trip:
+            // stringifying the whole DB into one JS string hits V8's ~512MB
+            // string ceiling on large databases (RangeError: Invalid string
+            // length), which rejected every patch. The cache is normalized to
+            // plain JSON values at load, so the clone semantics are identical.
+            patchStage = 'clone';
+            const snapshot = structuredClone(dbCache[filePath]);
+            patchStage = 'apply';
             let result;
             try {
                 result = applyPatch(snapshot, patch, true);
@@ -3783,6 +3885,7 @@ app.post('/api/patch', async (req, res, next) => {
             }, SAVE_INTERVAL);
 
             // Update ETag after successful patch (based on stripped version)
+            patchStage = 'etag';
             if (decodedKey === 'database/database.bin') {
                 dbEtag = computeBufferEtag(Buffer.from(encodeRisuSaveLegacy(dbCache[filePath])));
             }
@@ -3799,7 +3902,12 @@ app.post('/api/patch', async (req, res, next) => {
             res.send(responsePayload);
         });
     } catch (error) {
-        logger.error(`[Patch] Error applying patch to ${filePath}:`, error.name);
+        const decodedKeyForLog = isHex(filePath) ? Buffer.from(filePath, 'hex').toString('utf-8') : filePath;
+        logger.error(
+            `[Patch] Error applying patch to ${decodedKeyForLog} (stage=${patchStage}, ops=${Array.isArray(patch) ? patch.length : '?'}): `
+            + `${error?.name}: ${error?.message}`,
+            error?.stack
+        );
         res.status(500).send({
             error: 'Patch application failed: ' + (error && error.message ? error.message : error)
         });
@@ -5087,10 +5195,42 @@ app.post('/api/migrate/save-folder/cleanup/execute', async (req, res, next) => {
 const DB_BLOB_KEY = 'database/database.bin';
 const DB_BACKUP_PREFIX = 'database/dbbackup-';
 const ASSET_PREFIXES = ['assets/', 'remotes/', 'inlay/', 'inlay_thumb/', 'inlay_meta/', 'inlay_info/', 'coldstorage/'];
+const AUTO_SWEEP_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 function statsBasename(s) {
     if (!s) return '';
     return String(s).replace(/\\/g, '/').split('/').pop();
+}
+
+// Pull "assets/..." path references out of an arbitrary value. Non-string
+// values are serialized first so references nested inside plugin-stored JSON
+// (objects, arrays) are found too. Mirrors globalApi's extractAssetRefs.
+function extractAssetRefsFromText(value) {
+    let text;
+    if (typeof value === 'string') text = value;
+    else {
+        try { text = JSON.stringify(value) ?? ''; } catch { return []; }
+    }
+    return Array.from(text.matchAll(/assets[/\\][\w-]+\.\w+/g), (m) => m[0]);
+}
+
+// V3 plugin persistent storage lives in kv (cache/plugin-storage/*.json), not
+// in the DB blob, and may hold saveAsset paths. Returns basenames so callers
+// can union it with buildUncleanableSet before deciding what is orphaned.
+function collectPluginStorageAssetRefs() {
+    const set = new Set();
+    for (const key of kvList('cache/plugin-storage/')) {
+        try {
+            const raw = kvGet(key);
+            if (!raw) continue;
+            const text = Buffer.isBuffer(raw) ? raw.toString('utf-8') : String(raw);
+            for (const ref of extractAssetRefsFromText(text)) {
+                const bn = statsBasename(ref);
+                if (bn) set.add(bn);
+            }
+        } catch { /* unreadable entry — skip */ }
+    }
+    return set;
 }
 
 // Every asset reference reachable from the DB. Mirrors
@@ -5136,6 +5276,8 @@ function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
             if (Array.isArray(cha.additionalAssets)) for (const em of cha.additionalAssets) add(em?.[1]);
             if (cha.vits?.files) for (const k of Object.keys(cha.vits.files)) add(cha.vits.files[k]);
             if (Array.isArray(cha.ccAssets)) for (const a of cha.ccAssets) add(a?.uri);
+            // GPT-SoVITS reference audio — assetId holds the full "assets/..." path.
+            add(cha.gptSoVitsConfig?.ref_audio_data?.assetId);
         }
     }
     if (Array.isArray(dbObj.modules)) {
@@ -5147,6 +5289,9 @@ function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
     if (Array.isArray(dbObj.personas)) {
         for (const p of dbObj.personas) {
             add(p?.icon);
+            // Legacy `image` alongside `icon` on card-imported personas. Unread
+            // by current code but still a live reference — see getUncleanables.
+            add(p?.image);
             const embedded = p?.embeddedModule;
             if (includeModuleAssets && Array.isArray(embedded?.assets)) for (const a of embedded.assets) add(a?.[1]);
             add(embedded?.icon);
@@ -5157,7 +5302,116 @@ function buildUncleanableSet(dbObj, { includeModuleAssets = true } = {}) {
             if (item && typeof item === 'object' && 'imgFile' in item) add(item.imgFile);
         }
     }
+    // Plugins can persist asset paths (from risuai.saveAsset) anywhere inside
+    // their storage — as plain strings or nested in JSON values — so scan the
+    // serialized text for "assets/..." references instead of assuming a structure.
+    if (dbObj.pluginCustomStorage && typeof dbObj.pluginCustomStorage === 'object') {
+        for (const value of Object.values(dbObj.pluginCustomStorage)) {
+            for (const ref of extractAssetRefsFromText(value)) add(ref);
+        }
+    }
     return set;
+}
+
+function decodeRemoteMetaLastUsed(raw) {
+    try {
+        if (!raw) return null;
+        const text = Buffer.isBuffer(raw) ? raw.toString('utf-8') : String(raw);
+        const parsed = JSON.parse(text);
+        const lastUsed = Number(parsed?.lastUsed);
+        return Number.isFinite(lastUsed) ? lastUsed : null;
+    } catch {
+        return null;
+    }
+}
+
+async function computeAssetSweep({ includeAssets, assetGraceMs = 0, includeRemotes = false, checkpointLabel = 'AssetSweep' } = {}) {
+    await flushPendingDb();
+    const raw = kvGet(DB_BLOB_KEY);
+    if (!raw) return { error: 'No database blob' };
+    const dbObj = await decodeRisuSave(raw);
+    if (!dbObj || !Array.isArray(dbObj.characters)) return { error: 'Database decode failed' };
+
+    const uncleanable = buildUncleanableSet(dbObj);
+    const assets = includeAssets ? kvListWithSizesAndUpdatedAt('assets/') : [];
+    // A walker that returns nothing while assets exist means the decode
+    // produced a shape we do not understand — every asset would look orphaned.
+    // Refuse rather than delete the library. Checked before plugin-storage refs
+    // are unioned in so those can't mask a bad walk.
+    if (uncleanable.size === 0 && assets.length > 0) {
+        return { error: 'Reference scan produced no references — refusing to purge' };
+    }
+    for (const bn of collectPluginStorageAssetRefs()) uncleanable.add(bn);
+
+    const now = Date.now();
+    const assetVictims = includeAssets
+        ? assets.filter((it) => {
+            if (uncleanable.has(statsBasename(it.key))) return false;
+            if (assetGraceMs > 0 && now - Number(it.updated_at || 0) <= assetGraceMs) return false;
+            return true;
+        })
+        : [];
+
+    const remoteVictims = [];
+    const remoteMetaCreates = [];
+    let remotesScanned = 0;
+    if (includeRemotes) {
+        const characterIds = new Set(dbObj.characters.map((v) => v?.chaId).filter(Boolean));
+        const remoteRows = kvListWithSizesAndUpdatedAt('remotes/');
+        const remoteByKey = new Map(remoteRows.map((it) => [it.key, it]));
+        for (const it of remoteRows) {
+            if (it.key.endsWith('.meta')) continue;
+            remotesScanned++;
+            const base = statsBasename(it.key);
+            if (!base.endsWith('.local.bin')) continue;
+            const chaId = base.slice(0, -'.local.bin'.length);
+            if (characterIds.has(chaId)) continue;
+
+            const metaKey = `${it.key}.meta`;
+            const meta = remoteByKey.get(metaKey);
+            if (!meta) {
+                remoteMetaCreates.push(metaKey);
+                continue;
+            }
+            const lastUsed = decodeRemoteMetaLastUsed(kvGet(metaKey));
+            const newestUse = Math.max(Number(it.updated_at || 0), lastUsed ?? 0);
+            if (now - newestUse > AUTO_SWEEP_GRACE_MS) {
+                remoteVictims.push(it);
+                remoteVictims.push(meta);
+            }
+        }
+
+        for (const it of remoteRows) {
+            if (!it.key.endsWith('.meta')) continue;
+            const remoteKey = it.key.slice(0, -'.meta'.length);
+            if (!remoteByKey.has(remoteKey)) {
+                remoteVictims.push(it);
+            }
+        }
+    }
+
+    const victims = [...assetVictims, ...remoteVictims];
+    sqliteDb.transaction(() => {
+        for (const key of remoteMetaCreates) {
+            kvSet(key, Buffer.from(JSON.stringify({ lastUsed: now })));
+        }
+        for (const it of victims) kvDel(it.key);
+    })();
+
+    const deleted = victims.length;
+    const bytes = victims.reduce((sum, it) => sum + it.size, 0);
+    if (deleted > 0) {
+        try { checkpointWal('TRUNCATE'); } catch (e) { logger.warn(`[${checkpointLabel}] checkpoint failed:`, e?.message || e); }
+    }
+
+    return {
+        ok: true,
+        deleted: assetVictims.length,
+        assetsDeleted: assetVictims.length,
+        remotesDeleted: remoteVictims.length,
+        bytes,
+        scanned: assets.length + remotesScanned,
+    };
 }
 
 function statSafe(p) {
@@ -5316,8 +5570,12 @@ app.get('/api/db/stats', async (req, res, next) => {
             }
             trashed.available = true;
         }
-        if (stripped) {
+        // `characters` must be an array: a decode failure parks `{}` in dbCache,
+        // and walking that yields an empty reference set — which would report
+        // every stored asset as an orphan.
+        if (stripped && Array.isArray(stripped.characters)) {
             const uncleanable = buildUncleanableSet(stripped);
+            for (const bn of collectPluginStorageAssetRefs()) uncleanable.add(bn);
             for (const it of kvListWithSizes('assets/')) {
                 if (!uncleanable.has(statsBasename(it.key))) {
                     orphan.count++;
@@ -5432,6 +5690,7 @@ app.get('/api/db/stats/characters', async (req, res, next) => {
         }
 
         const uncleanable = buildUncleanableSet(dbObj);
+        for (const bn of collectPluginStorageAssetRefs()) uncleanable.add(bn);
         let orphanCount = 0, orphanTotal = 0;
         for (const it of kvListWithSizes('assets/')) {
             if (!uncleanable.has(statsBasename(it.key))) {
@@ -5506,6 +5765,44 @@ app.get('/api/db/stats/modules', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+// Delete every assets/* row no reference in the database points at. The count
+// shown by /api/db/stats comes from the in-memory stripped cache; this pass
+// recomputes from the persisted blob instead, so the deletion is decided by the
+// same bytes a backup would carry rather than by cache state.
+app.post('/api/db/assets/purge-orphans', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    if (!checkActiveSession(req, res)) return;
+    try {
+        const result = await queueStorageOperation(async () => {
+            const sweep = await computeAssetSweep({ includeAssets: true, checkpointLabel: 'PurgeOrphans' });
+            if (sweep.error) return sweep;
+            return { ok: true, deleted: sweep.deleted, bytes: sweep.bytes, scanned: sweep.scanned };
+        });
+        if (result.error) return res.status(400).json(result);
+        logger.info(`[PurgeOrphans] removed ${result.deleted}/${result.scanned} assets (${result.bytes} bytes)`);
+        res.json(result);
+    } catch (err) { next(err); }
+});
+
+app.post('/api/db/assets/auto-sweep', async (req, res, next) => {
+    if (!await checkAuth(req, res)) return;
+    if (!checkActiveSession(req, res)) return;
+    try {
+        const includeAssets = req.body?.assets === true;
+        const result = await queueStorageOperation(async () => {
+            return computeAssetSweep({
+                includeAssets,
+                assetGraceMs: AUTO_SWEEP_GRACE_MS,
+                includeRemotes: true,
+                checkpointLabel: 'AutoSweep',
+            });
+        });
+        if (result.error) return res.status(400).json(result);
+        logger.info(`[AutoSweep] removed assets=${result.assetsDeleted}, remotes=${result.remotesDeleted}, scanned=${result.scanned}, bytes=${result.bytes}`);
+        res.json(result);
+    } catch (err) { next(err); }
+});
+
 app.post('/api/db/optimize', async (req, res, next) => {
     if (!await checkAuth(req, res)) return;
     if (!checkActiveSession(req, res)) return;
@@ -5514,11 +5811,14 @@ app.post('/api/db/optimize', async (req, res, next) => {
         const dbFilePath = path.join(saveDir, 'risuai.db');
         const preDbSize = statSafe(dbFilePath)?.size ?? 0;
 
+        // VACUUM peaks at ~2x the DB size on disk: the transient copy it builds
+        // (routed to the save dir via SQLITE_TMPDIR) plus the WAL inflating to
+        // roughly the full DB while the copy is written back.
         const { free } = await diskFreeStat(saveDir);
-        if (preDbSize > 0 && free != null && free < preDbSize * 1.2) {
+        if (preDbSize > 0 && free != null && free < preDbSize * 2.2) {
             return res.status(400).json({
                 error: 'Insufficient disk space for VACUUM',
-                required: Math.ceil(preDbSize * 1.2),
+                required: Math.ceil(preDbSize * 2.2),
                 free,
             });
         }
@@ -5532,7 +5832,16 @@ app.post('/api/db/optimize', async (req, res, next) => {
             let gcDeleted = 0;
             try { gcDeleted = gcChunks(); } catch (e) { logger.warn('[Optimize] chunk gc failed:', e?.message || e); }
             try { checkpointWal('TRUNCATE'); } catch (e) { logger.warn('[Optimize] checkpoint failed:', e?.message || e); }
-            sqliteDb.exec('VACUUM');
+            // VACUUM copies the entire DB into a transient database that honors
+            // temp_store. With the session-wide temp_store=MEMORY that copy
+            // lands in RAM and OOM-kills the process on multi-GB DBs, so spill
+            // it to disk (SQLITE_TMPDIR = save dir) for the duration.
+            sqliteDb.pragma('temp_store = FILE');
+            try {
+                sqliteDb.exec('VACUUM');
+            } finally {
+                sqliteDb.pragma('temp_store = MEMORY');
+            }
             // VACUUM streams the whole DB through the WAL; without this checkpoint the
             // -wal file stays inflated until the next 5-min background TRUNCATE.
             try { checkpointWal('TRUNCATE'); } catch (e) { logger.warn('[Optimize] post-VACUUM checkpoint failed:', e?.message || e); }
@@ -6058,17 +6367,52 @@ app.post('/api/self-update', async (req, res) => {
         } catch { /* no user certs */ }
 
         // Keep set — matches updater.cjs + user data/config that must survive updates
-        const keep = new Set(['save', 'backups', '.installed-version', '.update-tmp', 'scripts', '.env', '.npmrc', '.portable']);
+        const keep = new Set(['save', 'backups', '.installed-version', '.installed-manifest', '.update-tmp', 'scripts', '.env', '.npmrc', '.portable']);
         if (isWin) keep.add('bin');
+
+        // Managed set — only entries the app shipped (new package contents ∪
+        // previously recorded manifest) may be removed. Anything else in the
+        // app root is a user file and must survive the update untouched.
+        const manifestPath = path.join(appDir, '.installed-manifest');
+        let oldManifest = [];
+        let hasOldManifest = false;
+        try {
+            oldManifest = (await fs.readFile(manifestPath, 'utf-8'))
+                .split('\n').map(s => s.trim()).filter(Boolean);
+            hasOldManifest = true;
+        } catch { /* pre-manifest install */ }
+        const newEntries = await fs.readdir(sourceDir);
+        const managed = new Set([...newEntries, ...oldManifest]);
+
+        // A user file whose name collides with an entry the new release
+        // introduces would be overwritten in Phase 2 — evacuate it to backups/
+        // instead of losing it. Only decidable when a previous manifest exists.
+        const isConflict = (e) => hasOldManifest
+            && !oldManifest.includes(e) && newEntries.includes(e);
+        const conflictDir = path.join(appDir, 'backups', `update-conflict-v${targetVersion}`);
+        // A retried update may have evacuated the same name before — never overwrite
+        const conflictDest = (e) => {
+            let dest = path.join(conflictDir, e);
+            for (let n = 1; existsSync(dest); n++) dest = path.join(conflictDir, `${e}.${n}`);
+            return dest;
+        };
 
         // Phase 1: move old files to backup — rollback immediately on any failure
         const backupDir = path.join(updateTmp, 'backup');
         await fs.mkdir(backupDir, { recursive: true });
 
+        const preserved = [];
         const oldEntries = await fs.readdir(appDir);
         for (const e of oldEntries) {
             if (keep.has(e)) continue;
+            if (!managed.has(e)) { preserved.push(e); continue; }
             try {
+                if (isConflict(e)) {
+                    console.log(`[Update] User file "${e}" collides with a new app file — moving it to backups/update-conflict-v${targetVersion}/`);
+                    await fs.mkdir(conflictDir, { recursive: true });
+                    await moveAcrossVolumes(path.join(appDir, e), conflictDest(e));
+                    continue;
+                }
                 await fs.rename(path.join(appDir, e), path.join(backupDir, e));
             } catch (backupErr) {
                 logger.error(`[Update] Failed to back up ${e}: ${backupErr.message}`);
@@ -6079,13 +6423,15 @@ app.post('/api/self-update', async (req, res) => {
                     : 'Update failed: some files are in use. Stop the server first, then try again.');
             }
         }
+        if (preserved.length) {
+            console.log(`[Update] Preserving user files: ${preserved.join(', ')}`);
+        }
 
         // Phase 2: move new files from extracted to app root
         const skipMove = new Set(['save', 'scripts']);
         if (isWin) skipMove.add('bin');
         const moved = [];
         try {
-            const newEntries = await fs.readdir(sourceDir);
             for (const e of newEntries) {
                 if (skipMove.has(e)) continue;
                 const dest = path.join(appDir, e);
@@ -6120,6 +6466,10 @@ app.post('/api/self-update', async (req, res) => {
                 await fs.copyFile(path.join(newScripts, f), path.join(appDir, 'scripts', f));
             }
         } catch { /* no scripts in release */ }
+
+        // Record what this release shipped, so the next update knows which
+        // entries are app-managed and leaves everything else alone.
+        await fs.writeFile(manifestPath, newEntries.join('\n') + '\n').catch(() => {});
 
         // Phase 4 (Windows): stage bin/ for restart script to apply after exit
         if (isWin) {

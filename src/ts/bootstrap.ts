@@ -17,7 +17,7 @@ import { updateColorScheme, updateTextThemeAndCSS } from "./gui/colorscheme";
 import { applyEarlyLanguage, changeLanguage, language } from "src/lang";
 import { startObserveDom } from "./observer.svelte";
 import { updateGuisize } from "./gui/guisize";
-import { updateLorebooks } from "./characters";
+import { changeChar, updateLorebooks } from "./characters";
 import { initMobileGesture } from "./hotkey";
 import { moduleUpdate } from "./process/modules";
 import {
@@ -25,8 +25,6 @@ import {
     saveDb,
     setPatchSyncBaseline,
     getDbBackups,
-    getUncleanables,
-    getBasename,
     checkCharOrder
 } from "./globalApi.svelte";
 import { registerModelDynamic } from "./model/modellist";
@@ -170,7 +168,30 @@ export async function loadData() {
                 console.warn('[bootstrap] boot backup reminder failed:', err)
             }
             loadedStore.set(true)
+
             selectedCharID.set(-1)
+
+            // Keep PocketRisu's normal clean boot (-1), then restore through
+            // the canonical changeChar path so lazy chat hydration, toggles,
+            // and chat UI initialization still run normally.
+            try {
+                const lastChaId = localStorage.getItem('risu-last-active-character')
+                const restoreIndex = lastChaId
+                    ? DBState.db.characters.findIndex((char) => char?.chaId === lastChaId)
+                    : -1
+
+                if (restoreIndex >= 0) {
+                    setTimeout(() => {
+                        try {
+                            changeChar(restoreIndex)
+
+                        } catch (error) {
+                            console.warn('[MobileResume] restore failed:', error)
+                        }
+                    }, 100)
+                }
+            } catch { /* best effort only */ }
+
             startObserveDom()
             assignIds()
             registerModelDynamic()
@@ -510,51 +531,25 @@ async function checkNewFormat(): Promise<void> {
  */
 async function cleanChunks() {
     const db = getDatabase()
-    const uncleanable = new Set(getUncleanables(db))
-    const indexes = await forageStorage.keys()
-    const allKeys = new Set(indexes)
-    const characterIds = new Set<string>(
-        db.characters.map((v) => v.chaId)
-    )
-    for (const asset of indexes) {
-        if (asset.endsWith('.meta')) {
-            continue
-        }
-        else if (asset.startsWith('assets/')) {
-            const n = getBasename(asset)
-            if(!uncleanable.has(n)) {
-                await forageStorage.removeItem(asset)
-            }
-        }
-        else if (asset.startsWith('remotes/')) {
-            const name = getBasename(asset).slice(0, -10) //remove .local.bin
-            const exists = characterIds.has(name)
-            if(!exists){
-                let okayToDelete = false
-                try {
-                    const metaPath = asset + '.meta'
-                    const metaExists = allKeys.has(metaPath)
-                    if (metaExists) {
-                        const metaData: Uint8Array = await forageStorage.getItem(metaPath) as unknown as Uint8Array
-                        const metaJson = JSON.parse(new TextDecoder().decode(metaData))
-                        const lastUsed = metaJson.lastUsed as number
-                        if(Date.now() - lastUsed > 1000 * 60 * 60 * 24 * 7) { //not used for 7 days
-                            okayToDelete = true
-                        }
-                    }
-                    else{
-                        //write meta for next time
-                        const metaJson = {
-                            lastUsed: Date.now()
-                        }
-                        await forageStorage.setItem(metaPath, new TextEncoder().encode(JSON.stringify(metaJson)))
-                    }
-                } catch (error) {}
-                if (okayToDelete) {
-                    await forageStorage.removeItem(asset)
-                }
-            }
-        }
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'risu-auth': await forageStorage.createAuth(),
+    }
+    const sessionId = await forageStorage.getSessionId()
+    if (sessionId) headers['x-session-id'] = sessionId
+
+    const response = await fetch('/api/db/assets/auto-sweep', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ assets: db.nodeOnlyAutoCleanAssets === true }),
+    })
+    if (!response.ok) {
+        let message = `auto-sweep failed: ${response.status}`
+        try {
+            const body = await response.json()
+            if (body?.error) message += ` ${body.error}`
+        } catch { /* non-json error body */ }
+        throw new Error(message)
     }
 }
 

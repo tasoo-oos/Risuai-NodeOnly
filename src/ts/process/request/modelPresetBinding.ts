@@ -111,9 +111,9 @@ export function resolveChatModelBinding(
 
 export function presetSupportsVision(preset: ModelPreset): boolean {
     const kind = preset.profileSnapshot?.adapterKind
-    if (!kind || !VISION_CAPABLE_ADAPTER_KINDS.includes(kind)) return false
     const caps = preset.profileSnapshot?.capabilities
-    return (caps?.includes('vision') ?? false) || preset.imageInput === true
+    return VISION_CAPABLE_ADAPTER_KINDS.includes(kind)
+        && ((caps?.includes('vision') ?? false) || preset.imageInput === true)
 }
 
 /**

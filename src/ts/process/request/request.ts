@@ -34,10 +34,11 @@ import {
     type AdapterToolCall, type AdapterToolDef, type AdapterUsage,
 } from "src/ts/preset/adapter";
 import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
-import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
+import { TOOL_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
+import { resolveWireModelId } from "src/ts/preset/adapter/wireInvariants";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch } from "./jobFetch";
-import { resolveChatModelBinding, buildModelPresetCredential, applyPromptPresetParams } from "./modelPresetBinding";
+import { resolveChatModelBinding, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
@@ -130,6 +131,7 @@ export type requestDataResponse = {
     modelId?: string
     messageId?: string
     serverOwned?: boolean
+    modelLabel?: string
 }|{
     type: "streaming",
     result: ReadableStream<StreamResponseChunk>,
@@ -140,6 +142,7 @@ export type requestDataResponse = {
     modelId?: string
     messageId?: string
     serverOwned?: boolean
+    modelLabel?: string
 }|{
     type: "job",
     job: ProviderRequestJob,
@@ -148,6 +151,7 @@ export type requestDataResponse = {
     }
     model?: string
     modelId?: string
+    modelLabel?: string
 }|{
     type: "multiline",
     result: ['user'|'char',string][],
@@ -158,6 +162,7 @@ export type requestDataResponse = {
     modelId?: string
     messageId?: string
     serverOwned?: boolean
+    modelLabel?: string
 }
 
 export interface StreamResponseChunk{[key:string]:string}
@@ -1005,6 +1010,18 @@ const formatPresetReasoning = formatReasoningParts
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
     const credential = buildModelPresetCredential(preset)
     const kind = preset.profileSnapshot.adapterKind
+    // Actual wire model id, for logs and generationInfo. The preset NAME was
+    // recorded before, which loses the real model once the preset is edited —
+    // and profileSnapshot.modelId alone is empty for profiles whose model is a
+    // user value (resolveWireModelId prefers userValues.modelId). Resolution
+    // throws only on broken config; the request would fail anyway, so fall
+    // back to something identifying for that failed entry's log row.
+    let wireModel: string
+    try {
+        wireModel = resolveWireModelId(preset)
+    } catch {
+        wireModel = preset.profileSnapshot.modelId || preset.name
+    }
     // arg.chatId is the per-request generationId for main chat (sendChat passes
     // it under that name; see generation-state-keying.md §1-bis). Aux requests
     // (translate/memory/emotion/sub) don't supply one, so mint a per-request key
@@ -1027,7 +1044,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         source: arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode)),
         chatId: genId,
         generationId: genId,
-        model: preset.profileSnapshot.modelId,
+        model: wireModel,
         provider: preset.profileSnapshot.providerBaseId,
         streaming: resolvePresetStreaming(preset, arg),
     })
@@ -1078,7 +1095,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             realChatId: arg.realChatId ?? genId,
             generationId: genId,
             adapterKind: kind,
-            model: preset.profileSnapshot.modelId,
+            model: wireModel,
             modelLabel: preset.name,
             inputTokens: arg.generationInfo?.inputTokens,
             outputTokens: arg.generationInfo?.outputTokens,
@@ -1106,8 +1123,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // the preset's imageInput toggle (for profiles like ollama / openai-compatible
     // whose snapshot does not declare 'vision'). Additive — both branches default
     // off, so OFF is byte-identical to the prior text-only behavior.
-    const supportsVision = VISION_CAPABLE_ADAPTER_KINDS.includes(kind)
-        && ((caps?.includes('vision') ?? false) || preset.imageInput === true)
+    const supportsVision = presetSupportsVision(preset)
 
     // Gemini context caching: MAIN chat requests on the google-gemini adapter
     // (AI Studio key auth OR Vertex native service-account auth) — tool runs and
@@ -1180,7 +1196,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     try {
         arg.formated = reformater(safeStructuredClone(arg.formated), presetFlags)
     } catch (err) {
-        return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: preset.name, modelId: preset.profileSnapshot.modelId }
+        return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: wireModel, modelLabel: preset.name }
     }
 
     // Expand `<tool_call>` history into structured tool turns ONLY on the active
@@ -1216,11 +1232,11 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             return {
                 type: 'success',
                 result: JSON.stringify({ url: prepared.url, body: prepared.body, headers: prepared.headers }),
-                model: preset.name,
-                modelId: preset.profileSnapshot.modelId,
+                model: wireModel,
+                modelLabel: preset.name,
             }
         } catch (err) {
-            return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: preset.name, modelId: preset.profileSnapshot.modelId }
+            return { type: 'fail', result: err instanceof Error ? err.message : String(err), model: wireModel, modelLabel: preset.name }
         } finally {
             void logScope.close()
         }
@@ -1258,7 +1274,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // The tool loop issues one request per turn; each is its own log
             // entry and all of them flush together here.
             void logScope.close()
-            return { type: 'success', result, model: preset.name, modelId: preset.profileSnapshot.modelId, toolExecuted: toolsExecuted }
+            return { type: 'success', result, model: wireModel, modelLabel: preset.name, toolExecuted: toolsExecuted }
         }
 
         const useStreaming = resolvePresetStreaming(preset, arg)
@@ -1327,11 +1343,11 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // once instead of token-by-token.
             if(preset.decoupledStreaming){
                 const text = await collectStreamingText(stream)
-                return { type: 'success', result: text, model: preset.name, modelId: preset.profileSnapshot.modelId }
+                return { type: 'success', result: text, model: wireModel, modelLabel: preset.name }
             }
             // endStatus fires from the pump's onFinish once the consumer drains
             // the stream — NOT here, because the stream outlives this return.
-            return { type: 'streaming', result: stream, model: preset.name, modelId: preset.profileSnapshot.modelId }
+            return { type: 'streaming', result: stream, model: wireModel, modelLabel: preset.name }
         }
         const response = await sendModelPreset(kind, preset, options, credential)
         logScope.setUsage(toLogUsage(response.usage))
@@ -1351,7 +1367,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                 })
             })
         }
-        return { type: 'success', result: formatPresetReasoning(response.reasoning) + response.text, model: preset.name, modelId: preset.profileSnapshot.modelId }
+        return { type: 'success', result: formatPresetReasoning(response.reasoning) + response.text, model: wireModel, modelLabel: preset.name }
     } catch (err) {
         console.error('[ModelPreset] request failed', describeModelPresetError(err))
         // A throw before the stream started (or instead of it) means onFinish
@@ -1365,8 +1381,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
         return {
             type: 'fail',
             result: err instanceof Error ? err.message : String(err),
-            model: preset.name,
-            modelId: preset.profileSnapshot.modelId,
+            model: wireModel,
+            modelLabel: preset.name,
         }
     }
 }

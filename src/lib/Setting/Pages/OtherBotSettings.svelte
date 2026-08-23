@@ -291,6 +291,8 @@
 
             <span class="text-textcolor">Model <Help key="naiModel"/></span>
             <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgModel} >
+                <OptionInput value="nai-diffusion-5-full" >nai-diffusion-5-full</OptionInput>
+                <OptionInput value="nai-diffusion-5-curated" >nai-diffusion-5-curated</OptionInput>
                 <OptionInput value="nai-diffusion-4-5-full" >nai-diffusion-4-5-full</OptionInput>
                 <OptionInput value="nai-diffusion-4-5-curated" >nai-diffusion-4-5-curated</OptionInput>
                 <OptionInput value="nai-diffusion-4-full" >nai-diffusion-4-full</OptionInput>
@@ -310,7 +312,9 @@
             {#if DBState.db.NAIImgModel === 'nai-diffusion-4-full'
             || DBState.db.NAIImgModel === 'nai-diffusion-4-curated-preview'
             || DBState.db.NAIImgModel === 'nai-diffusion-4-5-full'
-            || DBState.db.NAIImgModel === 'nai-diffusion-4-5-curated'}
+            || DBState.db.NAIImgModel === 'nai-diffusion-4-5-curated'
+            || DBState.db.NAIImgModel === 'nai-diffusion-5-full'
+            || DBState.db.NAIImgModel === 'nai-diffusion-5-curated'}
                 <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgConfig.sampler}>
                     <OptionInput value="k_euler_ancestral" >Euler Ancestral</OptionInput>
                     <OptionInput value="k_dpmpp_2s_ancestral" >DPM++ 2S Ancestral</OptionInput>
@@ -349,13 +353,16 @@
             <span class="text-textcolor">Image Reference <Help key="naiImageReference"/></span>
             <SelectInput className="mt-2 mb-4" bind:value={DBState.db.NAIImgConfig.reference_mode}>
                 <OptionInput value="" >None</OptionInput>
-                <OptionInput value="vibe" >Vibe Trasfer</OptionInput>
+                {#if DBState.db.NAIImgModel !== 'nai-diffusion-5-full' && DBState.db.NAIImgModel !== 'nai-diffusion-5-curated'}
+                    <OptionInput value="vibe" >Vibe Trasfer</OptionInput>
+                {/if}
                 {#if DBState.db.NAIImgModel === 'nai-diffusion-4-5-full' || DBState.db.NAIImgModel === 'nai-diffusion-4-5-curated'}
                     <OptionInput value="character" >Character Reference</OptionInput>
                 {/if}
             </SelectInput>
 
-            {#if DBState.db.NAIImgConfig.reference_mode === 'vibe'}
+            {#if DBState.db.NAIImgConfig.reference_mode === 'vibe'
+                && DBState.db.NAIImgModel !== 'nai-diffusion-5-full' && DBState.db.NAIImgModel !== 'nai-diffusion-5-curated'}
                 <div class="relative">
                 <button class="mb-4" onclick={async () => {
                     const file = await selectSingleFile(['naiv4vibe'])
@@ -1086,7 +1093,7 @@
 
                 <button class="mr-2 text-textcolor2 hover:text-primary cursor-pointer" onclick={async() => {
                     try {
-                        const bytesImport = (await selectSingleFile(['json'])).data
+                        const bytesImport = (await selectSingleFile(['json']))?.data
 
                         if(!bytesImport) return
 
@@ -1226,6 +1233,7 @@
             <OptionInput value="ada">OpenAI Ada</OptionInput>
             <OptionInput value="custom">Custom (OpenAI-compatible)</OptionInput>
             <OptionInput value="voyageContext3">Voyage Context 3</OptionInput>
+            <OptionInput value="voyageContext4">Voyage Context 4</OptionInput>
         </SelectInput>
 
         {#if DBState.db.hypaModel === 'openai3small' || DBState.db.hypaModel === 'openai3large' || DBState.db.hypaModel === 'ada'}
@@ -1242,7 +1250,7 @@
             <TextInput className="mt-2" marginBottom bind:value={DBState.db.hypaCustomSettings.model}/>
         {/if}
 
-        {#if DBState.db.hypaModel === 'voyageContext3'}
+        {#if DBState.db.hypaModel === 'voyageContext3' || DBState.db.hypaModel === 'voyageContext4'}
             <span class="text-textcolor">Voyage API Key <Help key="embeddingVoyageKey"/></span>
             <TextInput className="mt-2" marginBottom hideText={DBState.db.hideApiKey} bind:value={DBState.db.voyageApiKey}/>
         {/if}

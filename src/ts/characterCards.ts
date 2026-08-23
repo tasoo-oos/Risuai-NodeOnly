@@ -976,7 +976,9 @@ function convertCharbook(arg:{
         }
 
         //extention migration
-        const extensions = book.extensions ?? {}
+        // Clone so the delete-based migration below can't strip fields from the
+        // source card object, which may be converted again (e.g. import retry).
+        const extensions = safeStructuredClone(book.extensions ?? {})
 
         if(extensions.useProbability && extensions.probability !== undefined && extensions.probability !== 100){
             content = `@@probability ${extensions.probability}\n` + content
@@ -1669,6 +1671,12 @@ export async function downloadRisuHub(id:string, arg:{
                 const index = db.characters.length-1
                 characterFormatUpdate(index);
                 selectedCharID.set(index);
+                try {
+                    const char = db.characters[index]
+                    if (char?.chaId) {
+                        localStorage.setItem('risu-last-active-character', char.chaId)
+                    }
+                } catch {}
             }   
             return
         }
@@ -1686,6 +1694,12 @@ export async function downloadRisuHub(id:string, arg:{
             const index = db.characters.length-1
             characterFormatUpdate(index);
             selectedCharID.set(index);
+            try {
+                const char = db.characters[index]
+                if (char?.chaId) {
+                    localStorage.setItem('risu-last-active-character', char.chaId)
+                }
+            } catch {}
             alertStore.set({
                 type: 'none',
                 msg: ''
