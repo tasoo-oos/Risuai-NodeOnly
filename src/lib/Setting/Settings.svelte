@@ -1,6 +1,7 @@
 <script lang="ts">
-    import { AccessibilityIcon, ActivityIcon, PackageIcon, BotIcon, CodeIcon, CogIcon, ContactIcon, FlaskConicalIcon, ImageIcon, LanguagesIcon, MonitorIcon, MonitorSmartphoneIcon, Sailboat, ScrollTextIcon, SearchIcon, UserIcon, CircleXIcon, KeyboardIcon, TruckIcon, FileBoxIcon, Volume2Icon } from "@lucide/svelte";
+    import { AccessibilityIcon, ActivityIcon, PackageIcon, BotIcon, CodeIcon, CogIcon, ContactIcon, FlaskConicalIcon, ImageIcon, LanguagesIcon, MonitorIcon, MonitorSmartphoneIcon, Sailboat, ScrollTextIcon, SearchIcon, UserIcon, CircleXIcon, KeyboardIcon, TruckIcon, FileBoxIcon, Volume2Icon, HeartIcon, BrainIcon } from "@lucide/svelte";
     import { language } from "src/lang";
+    import { supportDialogOpen, supportEnabled } from "src/ts/support";
     import DisplaySettings from "./Pages/DisplaySettings.svelte";
     import NotificationSoundSettings from "./Pages/NotificationSoundSettings.svelte";
     import MigrationSettings from "./Pages/MigrationSettings.svelte";
@@ -20,6 +21,7 @@
     import LanguageSettings from "./Pages/LanguageSettings.svelte";
     import AccessibilitySettings from "./Pages/AccessibilitySettings.svelte";
     import PersonaSettings from "./Pages/PersonaSettings.svelte";
+    import MemorySettings from "./Pages/MemorySettings.svelte";
     import PromptSettings from "./Pages/PromptSettings.svelte";
     import ModuleSettings from "./Pages/Module/ModuleSettings.svelte";
   import { isLite } from "src/ts/lite";
@@ -66,6 +68,7 @@
         {#if (wide700.current && !$MobileGUI) || $SettingsMenuIndex === -1}
             <div class="flex h-full flex-col p-4 pt-8 gap-2 overflow-y-auto relative rs-setting-cont-3 shrink-0"
                 class:w-full={!wide700.current || $MobileGUI}
+                class:w-60={wide700.current && !$MobileGUI}
                 class:bg-darkbg={!$MobileGUI} class:bg-bgcolor={$MobileGUI}
             >
                 <!-- Fake-input trigger: the actual search lives in a dialog
@@ -115,6 +118,15 @@
                     }}>
                         <ContactIcon />
                         <span>{language.persona}</span>
+                    </button>
+                    <button class="flex gap-2 items-center hover:text-textcolor"
+                        class:text-textcolor={$SettingsMenuIndex === 24}
+                        class:text-textcolor2={$SettingsMenuIndex !== 24}
+                        onclick={() => {
+                            $SettingsMenuIndex = 24
+                    }}>
+                        <BrainIcon />
+                        <span>{language.longTermMemory}</span>
                     </button>
                     <button class="flex gap-2 items-center hover:text-textcolor"
                         class:text-textcolor={$SettingsMenuIndex === 2}
@@ -237,6 +249,15 @@
                         <CogIcon />
                         <span>{language.system}</span>
                     </button>
+                    {#if $supportEnabled}
+                        <button class="flex gap-2 items-center hover:text-textcolor text-textcolor2"
+                            onclick={() => {
+                            supportDialogOpen.set(true)
+                        }}>
+                            <HeartIcon />
+                            <span>{language.support}</span>
+                        </button>
+                    {/if}
                     {#if devPanelEnabled}
                         <button class="flex gap-2 items-center hover:text-textcolor"
                             class:text-textcolor={$SettingsMenuIndex === 99}
@@ -258,7 +279,7 @@
                             onclick={() => {
                                 menu.callback()
                         }}>
-                            <PluginDefinedIcon ico={menu} />
+                            <PluginDefinedIcon ico={menu} className="w-5 h-5 shrink-0" />
                             <span>{menu.name}</span>
                         </button>
                     {/each}
@@ -273,7 +294,7 @@
         {/if}
         {#if (wide700.current && !$MobileGUI) || $SettingsMenuIndex !== -1}
             {#key $SettingsMenuIndex}
-                <div class="grow py-6 px-4 bg-bgcolor flex flex-col text-textcolor overflow-y-auto relative rs-setting-cont-4 min-w-0">
+                <div class="grow py-6 px-4 bg-bgcolor flex flex-col text-textcolor overflow-y-auto relative rs-setting-cont-4 min-w-0 [scrollbar-gutter:stable]">
                     <div class="w-full max-w-2xl mx-auto flex flex-col">
                         {#if $SettingsMenuIndex === 0}
                             <MigrationSettings />
@@ -301,6 +322,8 @@
                             <AccessibilitySettings/>
                         {:else if $SettingsMenuIndex === 12}
                             <PersonaSettings/>
+                        {:else if $SettingsMenuIndex === 24}
+                            <MemorySettings/>
                         {:else if $SettingsMenuIndex === 14}
                             <ModuleSettings/>
                         {:else if $SettingsMenuIndex === 13}
@@ -348,5 +371,18 @@
     .setting-bg{
         background: linear-gradient(to right, var(--risu-theme-darkbg) 50%, var(--risu-theme-bgcolor) 50%);
 
+    }
+    /* The desktop sidebar is fixed-width, so a long menu name (plugins can
+       register any label) has to wrap inside it instead of widening the
+       column and squeezing the settings pane. */
+    .rs-setting-cont-3 button{
+        text-align: left;
+    }
+    .rs-setting-cont-3 span{
+        overflow-wrap: anywhere;
+    }
+    .rs-setting-cont-3 :global(svg),
+    .rs-setting-cont-3 :global(img){
+        flex-shrink: 0;
     }
 </style>

@@ -7,6 +7,8 @@
  */
 
 export const helpZhHant = {
+    "memoryPresetBinding": "此聊天使用的長期記憶預設集。\n\n- **預設**：跟隨 設定 → 長期記憶 中的預設集，並隨之變更。\n- **不使用**：超出上下文的舊訊息會直接被截斷。\n- **選擇預設集**：此聊天單獨使用該預設集（摘要模型、比例等）。\n\n以聊天為單位儲存，不影響同一角色的其他聊天。",
+    "memoryPresetDefault": "設為「預設」的聊天所使用的長期記憶預設集。設為「不使用」時，只有自行選擇預設集的聊天才會執行長期記憶。",
         "model": "此模型是對話時使用的主要模型。",
         "submodel": "輔助模型是一個用於分析情緒立繪、生成自動建議等的模型。",
         "oaiapikey": "OpenAI 的 API 金鑰，可在 https://platform.openai.com/account/api-keys 取得。",
@@ -148,6 +150,7 @@ export const helpZhHant = {
         "hypaV3EmbeddingRequestsPerMinute": "用於相似性搜尋的每分鐘最大嵌入模型請求數。",
         "hypaV3EmbeddingMaxConcurrent": "用於相似性搜尋的最大同時嵌入模型請求數。",
         "allowV2Plugin": "警告：此選項將啟用已棄用的 V2.0 外掛執行功能。V2.0 外掛會繞過 V2.1 安全檢查機制，可能存在安全風險。除非您明確信任該外掛且尚無法將其遷移至 V3，否則請保持停用。",
+        "allowV21Plugin": "警告：由於 V2.1 API 已被棄用且將在未來版本中停止運作，預設會封鎖安裝新的 V2.1 外掛。已安裝的 V2.1 外掛仍可繼續運作。僅在需要安裝或更新您信任的 V2.1 外掛時才啟用；V2.1 安全檢查仍會套用。",
         "inlayImageLossless": "啟用後，嵌入內容將以無損 PNG 格式儲存，而非壓縮的 WebP。這可保留原始畫質，但會佔用較多儲存空間。",
         "inlayImagePriority": "啟用後，嵌入內容將優先以圖片形式渲染以加快載入速度，圖片載入失敗後才自動切換為影片／音訊。若您使用大量影片或音訊嵌入，請停用此選項。",
         "showModelInSidebar": "在側邊欄中顯示目前 AI 模型名稱，方便快速查看。",

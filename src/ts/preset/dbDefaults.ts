@@ -1,11 +1,11 @@
 import type { ApiKeyPoolEntry, ModelPreset, ModelPresetMigrationSummary, RegistryCache, ResolvedModelProfileSnapshot } from './types'
-import { normalizeModelPresetLayout, type ModelPresetLayoutEntry } from './layout'
+import type { PromptPresetFolder } from '../storage/database.svelte'
 import { resolveSnapshot } from './registry/snapshot'
 import { loadBundledRegistry, getBundledRegistryId } from './registry/loader'
 
 export interface ModelPresetDefaultsTarget {
     modelPresets?: ModelPreset[]
-    modelPresetLayout?: ModelPresetLayoutEntry[]
+    modelPresetFolders?: PromptPresetFolder[]
     modelPresetMigrationVersion?: number
     modelPresetMigrationAppliedAt?: number
     modelPresetMigrationReport?: ModelPresetMigrationSummary
@@ -177,8 +177,8 @@ export function applyModelPresetDefaults(data: ModelPresetDefaultsTarget): void 
     if (!Array.isArray(data.modelPresets)) {
         data.modelPresets = []
     }
+    data.modelPresetFolders ??= []
     sanitizeModelPresetSnapshots(data.modelPresets)
-    data.modelPresetLayout = normalizeModelPresetLayout(data.modelPresetLayout, data.modelPresets)
     if (!data.apiKeyPool || typeof data.apiKeyPool !== 'object' || Array.isArray(data.apiKeyPool)) {
         data.apiKeyPool = {}
     }

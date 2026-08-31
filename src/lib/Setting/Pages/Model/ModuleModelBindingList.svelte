@@ -10,7 +10,6 @@
     import SettingRowLayout from 'src/lib/Setting/Wrappers/SettingRowLayout.svelte'
     import type { SettingItem } from 'src/ts/setting/types'
     import { listModelCallingModules } from 'src/ts/process/moduleModelBinding'
-    import { normalizeModelPresetLayout } from 'src/ts/preset/layout'
 
     // Read from db.modules (every installed module), not getModules() — the
     // latter is scoped to the character/chat currently open, which would make
@@ -19,8 +18,6 @@
 
     let bindings = $derived(DBState.db.moduleModelBindings ?? {})
     let presets = $derived(DBState.db.modelPresets ?? [])
-    let layout = $derived(normalizeModelPresetLayout(DBState.db.modelPresetLayout, presets))
-    let presetsById = $derived(new Map(presets.map((preset) => [preset.id, preset])))
 
     /** A stored id whose preset no longer exists. Kept, not cleared, so a
      * re-imported preset reconnects; surfaced here so it does not look bound. */
@@ -68,18 +65,8 @@
                         onchange={(e) => setBinding(module.id, e.currentTarget.value)}
                     >
                         <OptionInput value="">{language.moduleModelBindingUnset}</OptionInput>
-                        {#each layout as entry (`${entry.type}:${entry.id}`)}
-                            {#if entry.type === 'preset'}
-                                {@const preset = presetsById.get(entry.id)}
-                                {#if preset}<OptionInput value={preset.id}>{preset.name}</OptionInput>{/if}
-                            {:else}
-                                <optgroup label={entry.name}>
-                                    {#each entry.presetIds as presetId (presetId)}
-                                        {@const preset = presetsById.get(presetId)}
-                                        {#if preset}<OptionInput value={preset.id}>{preset.name}</OptionInput>{/if}
-                                    {/each}
-                                </optgroup>
-                            {/if}
+                        {#each presets as preset (preset.id)}
+                            <OptionInput value={preset.id}>{preset.name}</OptionInput>
                         {/each}
                     </ShSelect>
                 {/snippet}

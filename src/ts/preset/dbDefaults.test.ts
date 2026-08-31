@@ -8,7 +8,6 @@ describe('applyModelPresetDefaults', () => {
         applyModelPresetDefaults(db)
 
         expect(db.modelPresets).toEqual([])
-        expect(db.modelPresetLayout).toEqual([])
         expect(db.apiKeyPool).toEqual({})
         expect(db.modelProfileRegistryCache).toEqual({
             schemaVersion: 4,
@@ -33,7 +32,6 @@ describe('applyModelPresetDefaults', () => {
         applyModelPresetDefaults(db)
 
         expect(db.modelPresets).toEqual([{ id: 'preset-a' }])
-        expect(db.modelPresetLayout).toEqual([{ type: 'preset', id: 'preset-a' }])
         expect(db.apiKeyPool).toEqual({ keyA: { id: 'keyA' } })
         expect(db.modelProfileRegistryCache).toBe(existingCache)
         expect(db.modelProfileRegistryLastFetched).toBe(456)
