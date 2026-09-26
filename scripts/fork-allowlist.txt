@@ -1,0 +1,60 @@
+# Fork allowlist: paths the beta soft fork is allowed to change vs upstream/develop.
+# scripts/fork-delta.sh fails when the delta touches anything not matched here.
+# Keep this list as small as possible, and prefer upstreaming a change over
+# adding a pattern. Patterns are bash globs matched against repo-relative paths.
+
+# Fork tooling / guardrails
+scripts/fork-delta.sh
+scripts/fork-allowlist.txt
+.github/workflows/fork-guard.yml
+.github/workflows/docker-build.yml
+.gitignore
+package.json
+pnpm-lock.yaml
+
+# Anthropic batch jobs for Model Preset
+src/ts/process/request/anthropicBatchJob.ts
+src/ts/process/request/anthropicBatchJob.test.ts
+src/ts/process/request/anthropicBatchStatusJob.ts
+src/ts/process/request/anthropicBatchStatusJob.test.ts
+src/ts/process/request/providerJob.ts
+src/ts/process/request/requestStatusText.ts
+src/ts/process/request/safeStatus.ts
+src/ts/fetchLogPolicy.ts
+src/ts/fetchLogPolicy.test.ts
+
+# YAML prompt / chat interchange
+src/ts/yaml.ts
+src/ts/yaml.test.ts
+
+# Model preset request integration + status channel
+src/ts/process/request/request.ts
+src/ts/process/index.svelte.ts
+src/ts/process/mcp/aiaccess.ts
+src/ts/process/memory/hypav3.ts
+src/ts/process/scriptings.ts
+src/ts/process/stableDiff.ts
+src/ts/process/triggers.ts
+src/ts/translator/translator.ts
+src/ts/status/requestStatus.ts
+src/ts/status/requestStatus.test.ts
+src/ts/characters.ts
+src/ts/storage/database.svelte.ts
+src/ts/preset/adapter/anthropicMessages.ts
+src/ts/preset/adapter/index.ts
+src/ts/preset/adapter/toolLoop.ts
+src/ts/preset/adapter/toolLoop.test.ts
+src/ts/preset/registry/bundled/profiles/anthropic/*.json
+
+# UI surfaces
+src/lib/ChatScreens/Suggestion.svelte
+src/lib/ChatScreens/DefaultChatScreen.svelte
+src/lib/Playground/PlaygroundMenu.svelte
+src/lib/Playground/PlaygroundImageTrans.svelte
+src/lib/Playground/PlaygroundSubtitle.svelte
+src/lib/Setting/Pages/Advanced/BanCharacterSetSettings.svelte
+src/lib/Setting/Pages/PromptPreset/PromptPresetBasicInfo.svelte
+src/lib/UI/GUI/RequestStatusToast.svelte
+
+# Localized strings for fork-only flags
+src/lang/*.ts
