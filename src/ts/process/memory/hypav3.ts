@@ -15,7 +15,7 @@ import {
     getCurrentCharacter,
 } from "src/ts/storage/database.svelte";
 import { type OpenAIChat } from "../index.svelte";
-import { requestChatData } from "../request/request";
+import { requestChatData, resolveRequestJob } from "../request/request";
 import { resolveChatMaxResponseTokens } from "../request/modelPresetBinding";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { chatCompletion, unloadEngine } from "../webllm";
@@ -1700,7 +1700,7 @@ export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolea
             subModelUrl = db.customModels?.find(m => m.id === actualModel)?.url ?? '';
         }
 
-        const response = await requestChatData(
+        let response = await requestChatData(
             {
                 formated,
                 bias: {},
@@ -1710,7 +1710,9 @@ export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolea
             },
             "memory"
         );
+        response = await resolveRequestJob(response);
 
+        let responseText = "";
         if (response.type === "streaming" || response.type === "multiline") {
             throw new Error("Unexpected response type");
         }
@@ -1719,13 +1721,17 @@ export async function summarize(oaiMessages: OpenAIChat[], isResummarize: boolea
             throw new Error(response.result);
         }
 
-        if (!response.result || response.result.trim().length === 0) {
+        if (response.type === "success") {
+            responseText = response.result;
+        }
+
+        if (!responseText || responseText.trim().length === 0) {
             throw new Error("Empty summary returned");
         }
 
         // Remove thoughts content for API
         const thoughtsRegex = /<Thoughts>[\s\S]*?<\/Thoughts>/g;
-        const result = response.result.replace(thoughtsRegex, "").trim();
+        const result = responseText.replace(thoughtsRegex, "").trim();
 
         if (result.length === 0) {
             throw new Error("Empty summary after removing thoughts content");

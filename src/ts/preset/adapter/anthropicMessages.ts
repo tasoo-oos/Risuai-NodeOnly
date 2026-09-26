@@ -159,6 +159,15 @@ export function previewAnthropicChatRequest(
     return prepareAnthropicBody(preset, options, credential, false)
 }
 
+export function prepareAnthropicChatRequest(
+    preset: ModelPreset,
+    options: AdapterChatOptions,
+    credential: AdapterCredential | undefined,
+    stream: boolean,
+): Promise<AdapterPreparedRequest> {
+    return prepareAnthropicBody(preset, options, credential, stream)
+}
+
 async function prepareAnthropicBody(
     preset: ModelPreset,
     options: AdapterChatOptions,
