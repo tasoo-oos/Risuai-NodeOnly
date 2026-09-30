@@ -24,8 +24,10 @@ import { applyParameters, collectStreamingText, type ModelModeExtended } from '.
 import {
     sendChatRequest, streamChatRequest, previewChatRequest,
     sendAnthropicChatRequest, streamAnthropicChatRequest, previewAnthropicChatRequest,
+    prepareAnthropicChatRequest,
     sendGoogleChatRequest, streamGoogleChatRequest, previewGoogleChatRequest,
     runToolLoop,
+    ToolLoopAbortError,
     type AdapterCacheContext,
     type AdapterChatMessage, type AdapterChatOptions, type AdapterChatResponse,
     type AdapterChatStreamDelta, type AdapterCredential,
@@ -43,7 +45,13 @@ import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, recordRequestLog, stripInlineMedia, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
 import {
     startStatus, appendText, endStatus, setStatusTokenCounter, addBadge,
+    type RequestKind,
 } from "src/ts/status/requestStatus";
+import type { ProviderJobResult, ProviderJobStatus, ProviderRequestJob } from './providerJob';
+import { decorateJob } from './providerJob';
+import { DEFAULT_ANTHROPIC_BATCH_TIMEOUT_MS, previewAnthropicBatchRequest, submitAnthropicBatchJob, type AnthropicBatchJob } from './anthropicBatchJob';
+import { ANTHROPIC_BATCH_STATUS_ABANDON_GRACE_MS, wrapAnthropicBatchStatusJob } from './anthropicBatchStatusJob';
+import { requestStatusText } from './requestStatusText';
 
 export type ToolCall = {
     name: string;
@@ -129,6 +137,14 @@ export type requestDataResponse = {
     model?: string
     modelLabel?: string
 }|{
+    type: "job",
+    job: ProviderRequestJob,
+    special?: {
+        emotion?: string
+    }
+    model?: string
+    modelLabel?: string
+}|{
     type: "multiline",
     result: ['user'|'char',string][],
     special?: {
@@ -139,6 +155,44 @@ export type requestDataResponse = {
 }
 
 export interface StreamResponseChunk{[key:string]:string}
+
+function mapProviderJobResult(
+    job: ProviderRequestJob,
+    mapSuccess: (text: string) => Promise<string>,
+): ProviderRequestJob {
+    return decorateJob(job, {
+        wait: async (options) => {
+            const result = await job.wait({ ...options, deferSuccessStatus: true })
+            if (result.type !== 'success') return result
+            try {
+                const mapped = { type: 'success' as const, result: await mapSuccess(result.result) }
+                job.finishMappedResult?.(mapped)
+                return mapped
+            } catch (e) {
+                const mapped = { type: 'fail' as const, result: e instanceof Error ? e.message : String(e) }
+                job.finishMappedResult?.(mapped)
+                return mapped
+            }
+        },
+    })
+}
+
+export async function resolveRequestJob(
+    res: requestDataResponse,
+    signal?: AbortSignal | null,
+): Promise<Exclude<requestDataResponse, { type: 'job' }>> {
+    if (res.type !== 'job') return res
+    const result = await res.job.wait({ signal })
+    if (result.type === 'success') {
+        return { type: 'success', result: result.result, special: res.special, model: res.model }
+    }
+    return {
+        type: 'fail',
+        result: result.result ?? 'Provider job canceled',
+        special: res.special,
+        model: res.model,
+    }
+}
 
 export async function requestChatData(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
     const db = getDatabase()
@@ -208,6 +262,20 @@ export async function requestChatData(arg:requestDataArgument, model:ModelModeEx
                 staticModel: fallBackModels[fallbackIndex],
                 tools: tools,
             }, model, abortSignal)
+
+            if(da.type === 'job'){
+                return {
+                    ...da,
+                    job: mapProviderJobResult(da.job, async (text) => {
+                        if(arg.escape) text = risuEscape(text)
+                        for(const replacer of pluginV2.replacerafterRequest){
+                            text = await replacer(text, model)
+                        }
+                        return text
+                    }),
+                    model: fallBackModels[fallbackIndex] || da.model
+                }
+            }
 
             // A ModelPreset response that already executed tools must be returned
             // as-is and NEVER re-run: the side effects (possibly writes) are done.
@@ -688,6 +756,222 @@ function toAdapterToolDef(tool: MCPTool): AdapterToolDef {
 // byte) — see preset/adapter/reasoning.ts.
 const formatPresetReasoning = formatReasoningParts
 
+const ANTHROPIC_MESSAGES_ADAPTER_KIND = 'anthropic-messages'
+const ANTHROPIC_PROVIDER_BASE_ID = 'anthropic'
+const ANTHROPIC_SERVICE_TIER_PATH = 'service_tier'
+const ANTHROPIC_BATCH_SERVICE_TIER = 'batch'
+
+function isAnthropicPresetBatchCandidate(preset: ModelPreset): boolean {
+    return preset.profileSnapshot.adapterKind === ANTHROPIC_MESSAGES_ADAPTER_KIND
+        && preset.profileSnapshot.providerBaseId === ANTHROPIC_PROVIDER_BASE_ID
+}
+
+function shouldUsePreparedAnthropicPresetBatch(
+    preset: ModelPreset,
+    prepared: Awaited<ReturnType<typeof prepareAnthropicChatRequest>>,
+): boolean {
+    return isAnthropicPresetBatchCandidate(preset)
+        && prepared.body[ANTHROPIC_SERVICE_TIER_PATH] === ANTHROPIC_BATCH_SERVICE_TIER
+}
+
+async function createAnthropicPresetBatchJob(
+    preset: ModelPreset,
+    options: AdapterChatOptions,
+    credential: AdapterCredential | undefined,
+    fetchImpl: typeof fetch,
+    arg: RequestDataArgumentExtended,
+    prepared: Awaited<ReturnType<typeof prepareAnthropicChatRequest>>,
+    chatId?: string,
+    status?: { report: boolean, genId: string, kind: RequestKind },
+): Promise<requestDataResponse> {
+    if (status?.report) {
+        safeStatus(() => {
+            startStatus(status.genId, {
+                kind: status.kind,
+                label: preset.name,
+                chatId,
+                phase: 'waiting',
+                abandonAfterMs: DEFAULT_ANTHROPIC_BATCH_TIMEOUT_MS + ANTHROPIC_BATCH_STATUS_ABANDON_GRACE_MS,
+                now: Date.now(),
+            })
+            addBadge(status.genId, {
+                key: 'batch',
+                text: requestStatusText('batchSubmitting'),
+                tone: 'info',
+            })
+        })
+    }
+    if (options.abortSignal?.aborted) {
+        if (status?.report) {
+            safeStatus(() => {
+                addBadge(status.genId, {
+                    key: 'batch',
+                    text: requestStatusText('batchCanceled'),
+                    tone: 'warn',
+                })
+                endStatus(status.genId, 'aborted', { now: Date.now() })
+            })
+        }
+        return { type: 'fail', result: 'Aborted', model: preset.name }
+    }
+    const submission = await submitAnthropicBatchJob({
+        prepared,
+        fetchImpl,
+        // Do not abort the create-batch transport with the UI signal: Anthropic may
+        // accept the batch but the aborted response would lose the provider batch id,
+        // leaving us unable to submit /cancel. Let creation return an id, then cancel.
+        customId: uuidv4(),
+        chatId,
+    })
+    if (submission.ok === false) {
+        if (status?.report) {
+            const outcome = options.abortSignal?.aborted ? 'aborted' : 'failed'
+            safeStatus(() => {
+                addBadge(status.genId, {
+                    key: 'batch',
+                    text: outcome === 'failed'
+                        ? requestStatusText('batchFailed')
+                        : requestStatusText('batchCanceled'),
+                    tone: 'warn',
+                })
+                endStatus(status.genId, outcome, {
+                    now: Date.now(),
+                    error: outcome === 'failed' ? submission.error : undefined,
+                })
+            })
+        }
+        return { type: 'fail', result: submission.error, model: preset.name }
+    }
+    if (options.abortSignal?.aborted) {
+        await submission.job.cancel()
+    }
+    if (status?.report) {
+        safeStatus(() => {
+            addBadge(status.genId, {
+                key: 'batch',
+                text: requestStatusText('batchSubmitted'),
+                tone: 'info',
+            })
+        })
+    }
+    const toolLoopJob = options.tools && options.tools.length > 0
+        ? createAnthropicPresetBatchToolLoopJob({
+            firstJob: submission.job,
+            preset,
+            credential,
+            fetchImpl,
+            arg,
+            initialMessages: options.messages,
+            tools: options.tools,
+            chatId,
+        })
+        : submission.job
+    const job = status?.report ? wrapAnthropicBatchStatusJob(toolLoopJob, status.genId) : toolLoopJob
+    return {
+        type: 'job',
+        job,
+        model: preset.name,
+    }
+}
+
+function createAnthropicPresetBatchToolLoopJob(options: {
+    firstJob: AnthropicBatchJob
+    preset: ModelPreset
+    credential: AdapterCredential | undefined
+    fetchImpl: typeof fetch
+    arg: RequestDataArgumentExtended
+    initialMessages: AdapterChatMessage[]
+    tools: AdapterToolDef[]
+    chatId?: string
+}): ProviderRequestJob {
+    let currentJob: AnthropicBatchJob = options.firstJob
+
+    return decorateJob(options.firstJob, {
+        getStatus: () => currentJob.getStatus(),
+        cancel: () => currentJob.cancel(),
+        wait: async (waitOptions = {}): Promise<ProviderJobResult> => {
+            let first = true
+            let lastFailure: ProviderJobResult | undefined
+            try {
+                const result = await runToolLoop(options.initialMessages, {
+                    maxSteps: MODEL_PRESET_MAX_TOOL_STEPS,
+                    formatReasoning: formatPresetReasoning,
+                    abortSignal: waitOptions.signal ?? undefined,
+                    send: async (convo) => {
+                        if (!first) {
+                            if (waitOptions.signal?.aborted) {
+                                throw new ToolLoopAbortError('Anthropic batch canceled')
+                            }
+                            const prepared = await prepareAnthropicChatRequest(
+                                options.preset,
+                                { messages: convo, tools: options.tools, abortSignal: waitOptions.signal ?? undefined, fetchImpl: options.fetchImpl },
+                                options.credential,
+                                false,
+                            )
+                            if (waitOptions.signal?.aborted) {
+                                throw new ToolLoopAbortError('Anthropic batch canceled')
+                            }
+                            const submitted = await submitAnthropicBatchJob({
+                                prepared,
+                                fetchImpl: options.fetchImpl,
+                                // Preserve the follow-up batch id even if the user
+                                // cancels while creation is in flight; then send
+                                // Anthropic's explicit cancel request below.
+                                customId: uuidv4(),
+                                chatId: options.chatId,
+                            })
+                            if (submitted.ok === false) {
+                                lastFailure = { type: 'fail', result: submitted.error }
+                                if (waitOptions.signal?.aborted) throw new ToolLoopAbortError(submitted.error)
+                                throw new Error(submitted.error)
+                            }
+                            currentJob = submitted.job
+                            if (waitOptions.signal?.aborted) {
+                                await currentJob.cancel()
+                                waitOptions.onStatus?.(currentJob.getStatus())
+                                throw new ToolLoopAbortError('Anthropic batch canceled')
+                            }
+                            waitOptions.onStatus?.(currentJob.getStatus())
+                        }
+                        first = false
+                        const response = await currentJob.waitForResponse({
+                            signal: waitOptions.signal,
+                            onStatus: (status: ProviderJobStatus) => waitOptions.onStatus?.(status),
+                        })
+                        if (response.type !== 'success') {
+                            lastFailure = response
+                            if (response.type === 'canceled') {
+                                throw new ToolLoopAbortError(response.result ?? 'Anthropic batch canceled')
+                            }
+                            throw new Error(response.result ?? 'Anthropic batch did not complete successfully')
+                        }
+                        return response.response
+                    },
+                    executeTool: async (call) => {
+                        const executed = await executeModelPresetTool(options.arg, call)
+                        let encoded: string | undefined
+                        if (options.arg.rememberToolUsage && executed.response.length > 0) {
+                            try {
+                                encoded = await encodeToolCall({
+                                    call: { id: call.id, name: call.name, arg: call.arguments },
+                                    response: executed.response,
+                                })
+                            } catch (e) {
+                                console.error('[ModelPreset] tool-call persistence failed', e)
+                            }
+                        }
+                        return { text: executed.text, encoded }
+                    },
+                })
+                return { type: 'success', result }
+            } catch (err) {
+                if (lastFailure) return lastFailure
+                return { type: 'fail', result: err instanceof Error ? err.message : String(err) }
+            }
+        },
+    })
+}
+
 async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelPreset, abortSignal:AbortSignal=null, mode:ModelModeExtended='model'):Promise<requestDataResponse> {
     const credential = buildModelPresetCredential(preset)
     const kind = preset.profileSnapshot.adapterKind
@@ -750,6 +1034,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     const tools = (supportsTools && arg.tools && arg.tools.length > 0)
         ? arg.tools.map(toAdapterToolDef)
         : undefined
+    const canUseAnthropicBatch = isAnthropicPresetBatchCandidate(preset)
 
     // Server-side job routing (Stage 3, model-preset-server-side-requests.md):
     // toggle ON + no tools (the tool loop stays browser-bound) + not a preview.
@@ -902,6 +1187,13 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                 messages, tools, fetchImpl,
                 anthropicCache1h: getDatabase().claude1HourCaching === true,
             }, credential)
+            if (shouldUsePreparedAnthropicPresetBatch(preset, prepared)) {
+                return {
+                    type: 'success',
+                    result: JSON.stringify(previewAnthropicBatchRequest(prepared)),
+                    model: preset.name,
+                }
+            }
             return {
                 type: 'success',
                 result: JSON.stringify({ url: prepared.url, body: prepared.body, headers: prepared.headers }),
@@ -916,10 +1208,32 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     }
 
     try {
+        if (canUseAnthropicBatch) {
+            const batchFetchImpl = makeProxiedFetch(arg.chatId)
+            const prepared = await prepareAnthropicChatRequest(
+                preset,
+                { messages, tools, abortSignal: abortSignal ?? undefined, fetchImpl: batchFetchImpl },
+                credential,
+                false,
+            )
+            if (shouldUsePreparedAnthropicPresetBatch(preset, prepared)) {
+                return await createAnthropicPresetBatchJob(
+                    preset,
+                    { messages, tools, abortSignal: abortSignal ?? undefined, fetchImpl: batchFetchImpl },
+                    credential,
+                    batchFetchImpl,
+                    arg,
+                    prepared,
+                    arg.chatId,
+                    { report: reportStatus, genId, kind: statusKind },
+                )
+            }
+        }
+
         // Tool runs always go non-streaming for now: the execute→re-request loop
         // needs the full structured response (tool_calls) each turn, and
         // streaming tool_call assembly is a later stage. Status is NOT reported
-        // for the tool path in v1 (it bypasses the pump); see the toast infra note.
+        // for the non-batch tool path in v1 (it bypasses the pump); see the toast infra note.
         if (tools) {
             const { result, toolsExecuted } = await runModelPresetToolLoop(arg, preset, kind, credential, fetchImpl, messages, tools, abortSignal)
             // The tool loop issues one request per turn; each is its own log
@@ -1064,7 +1378,16 @@ export async function testModelPreset(preset: ModelPreset, message: string, abor
         logSource: 'test',
     }
     const start = performance.now()
-    const res = await requestModelPreset(arg, preset, abortSignal)
+    let res: Exclude<requestDataResponse, { type: 'job' }>
+    try {
+        res = await resolveRequestJob(await requestModelPreset(arg, preset, abortSignal), abortSignal)
+    } catch (err) {
+        return {
+            ok: false,
+            message: err instanceof Error ? err.message : String(err),
+            latencyMs: Math.round(performance.now() - start),
+        }
+    }
     const latencyMs = Math.round(performance.now() - start)
     // useStreaming:false + no tools guarantees a success/fail (never streaming/multiline),
     // but fall through defensively rather than asserting the union.
