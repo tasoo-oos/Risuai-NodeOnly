@@ -55,6 +55,7 @@ src/lib/Playground/PlaygroundSubtitle.svelte
 src/lib/Setting/Pages/Advanced/BanCharacterSetSettings.svelte
 src/lib/Setting/Pages/PromptPreset/PromptPresetBasicInfo.svelte
 src/lib/UI/GUI/RequestStatusToast.svelte
+src/lib/UI/ModelPresetList.svelte
 
 # Localized strings for fork-only flags
 src/lang/*.ts
