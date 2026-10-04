@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
-import type { AdapterPreparedRequest } from 'src/ts/preset/adapter'
+import { prepareAnthropicChatRequest, type AdapterPreparedRequest } from 'src/ts/preset/adapter'
+import type { ModelPreset } from 'src/ts/preset/types'
 import { AnthropicBatchJob, anthropicBatchBaseUrl, previewAnthropicBatchRequest, submitAnthropicBatchJob, type AnthropicBatchFetchLogEntry } from './anthropicBatchJob'
 
 interface CapturedCall {
@@ -194,6 +195,60 @@ describe('Anthropic preset batch jobs', () => {
                     max_tokens: 100,
                     tools: [{ name: 'Dice', input_schema: { type: 'object' } }],
                     tool_choice: { type: 'tool', name: 'Dice' },
+                },
+            }],
+        })
+    })
+
+    test('carries the 1h cache TTL and its beta header into the batch submission', async () => {
+        const preset: ModelPreset = {
+            id: 'preset-anthropic-batch',
+            name: 'Anthropic Batch',
+            profileSnapshot: {
+                profileId: 'demo:anthropic',
+                profileVersion: 1,
+                providerBaseId: 'anthropic',
+                providerBaseVersion: 1,
+                adapterKind: 'anthropic-messages',
+                auth: { kind: 'x-api-key', fields: ['apiKey'] },
+                endpoint: { kind: 'static', url: 'https://api.anthropic.com/v1/messages' },
+                modelId: 'claude-test',
+                schema: [],
+                uiSchema: { groups: [], fields: [] },
+                defaults: { max_tokens: 100, service_tier: 'batch' },
+                headerTemplate: { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+            },
+            userValues: {},
+            createdAt: 0,
+            updatedAt: 0,
+        }
+        const { fetchImpl, calls } = captureFetch(() => jsonResponse({ id: 'batch_123' }))
+        const req = await prepareAnthropicChatRequest(
+            preset,
+            {
+                messages: [
+                    { role: 'system', content: 'Be brief.', cachePoint: true },
+                    { role: 'user', content: 'Hi', cachePoint: true },
+                ],
+                fetchImpl,
+                anthropicCache1h: true,
+            },
+            { apiKey: 'sk-test' },
+            false,
+        )
+
+        await submitAnthropicBatchJob({ prepared: req, fetchImpl, customId: 'custom-1' })
+
+        const oneHour = { type: 'ephemeral', ttl: '1h' }
+        expect(calls[0].headers['anthropic-beta']).toBe('extended-cache-ttl-2025-04-11')
+        expect(calls[0].body).toEqual({
+            requests: [{
+                custom_id: 'custom-1',
+                params: {
+                    model: 'claude-test',
+                    max_tokens: 100,
+                    system: [{ type: 'text', text: 'Be brief.', cache_control: oneHour }],
+                    messages: [{ role: 'user', content: [{ type: 'text', text: 'Hi', cache_control: oneHour }] }],
                 },
             }],
         })
