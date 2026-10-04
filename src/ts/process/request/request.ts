@@ -863,6 +863,7 @@ async function createAnthropicPresetBatchJob(
             arg,
             initialMessages: options.messages,
             tools: options.tools,
+            anthropicCache1h: options.anthropicCache1h,
             chatId,
         })
         : submission.job
@@ -882,6 +883,7 @@ function createAnthropicPresetBatchToolLoopJob(options: {
     arg: RequestDataArgumentExtended
     initialMessages: AdapterChatMessage[]
     tools: AdapterToolDef[]
+    anthropicCache1h?: boolean
     chatId?: string
 }): ProviderRequestJob {
     let currentJob: AnthropicBatchJob = options.firstJob
@@ -904,7 +906,10 @@ function createAnthropicPresetBatchToolLoopJob(options: {
                             }
                             const prepared = await prepareAnthropicChatRequest(
                                 options.preset,
-                                { messages: convo, tools: options.tools, abortSignal: waitOptions.signal ?? undefined, fetchImpl: options.fetchImpl },
+                                {
+                                    messages: convo, tools: options.tools, abortSignal: waitOptions.signal ?? undefined, fetchImpl: options.fetchImpl,
+                                    anthropicCache1h: options.anthropicCache1h,
+                                },
                                 options.credential,
                                 false,
                             )
@@ -1210,16 +1215,20 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     try {
         if (canUseAnthropicBatch) {
             const batchFetchImpl = makeProxiedFetch(arg.chatId)
+            const batchOptions: AdapterChatOptions = {
+                messages, tools, abortSignal: abortSignal ?? undefined, fetchImpl: batchFetchImpl,
+                anthropicCache1h: getDatabase().claude1HourCaching === true,
+            }
             const prepared = await prepareAnthropicChatRequest(
                 preset,
-                { messages, tools, abortSignal: abortSignal ?? undefined, fetchImpl: batchFetchImpl },
+                batchOptions,
                 credential,
                 false,
             )
             if (shouldUsePreparedAnthropicPresetBatch(preset, prepared)) {
                 return await createAnthropicPresetBatchJob(
                     preset,
-                    { messages, tools, abortSignal: abortSignal ?? undefined, fetchImpl: batchFetchImpl },
+                    batchOptions,
                     credential,
                     batchFetchImpl,
                     arg,
