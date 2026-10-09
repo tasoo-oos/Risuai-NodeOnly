@@ -4,7 +4,7 @@
     import TextAreaInput from "../UI/GUI/TextAreaInput.svelte";
     import Button from "../UI/GUI/Button.svelte";
     import { jsonOutputTrimmer, selectSingleFile } from "src/ts/util";
-    import { requestChatData } from "src/ts/process/request/request";
+    import { requestChatData, resolveRequestJob } from "src/ts/process/request/request";
     import { notifyError } from "src/ts/alert";
     import SelectInput from "../UI/GUI/SelectInput.svelte";
     import NumberInput from "../UI/GUI/NumberInput.svelte";
@@ -159,7 +159,7 @@
             }
     
 
-            const d = await requestChatData({
+            let d = await requestChatData({
                 formated: [{
                     role: 'user',
                     content: prompt.replace('{{slot}}', selLang),
@@ -171,21 +171,29 @@
                 bias: {},
                 schema: JSON.stringify(schema)
             }, 'translate')
+            d = await resolveRequestJob(d)
 
+            let responseText = ''
             if(d.type === 'streaming' || d.type === 'multiline'){
                 loading = false;
                 return notifyError('This model is not supported in the playground')
             }
 
-            if(d.type !== 'success'){
+            if(d.type === 'fail'){
+                loading = false;
                 notifyError(d.result)
+                return
+            }
+
+            if(d.type === 'success'){
+                responseText = d.result
             }
 
             if(mode === 'manual'){
                 let outputObj:any[] = []
-                console.log(d.result)
-                console.log(jsonOutputTrimmer(d.result))
-                const resultParsed = JSON.parse(jsonOutputTrimmer(d.result));
+                console.log(responseText)
+                console.log(jsonOutputTrimmer(responseText))
+                const resultParsed = JSON.parse(jsonOutputTrimmer(responseText));
                 if(output){
                     try {
                     outputObj = JSON.parse(output);                        
@@ -213,8 +221,8 @@
             }
             else{
 
-                output = d.result
-                output = JSON.stringify(JSON.parse(jsonOutputTrimmer(d.result)), null, 2);
+                output = responseText
+                output = JSON.stringify(JSON.parse(jsonOutputTrimmer(responseText)), null, 2);
                 loading = false;
                 render()
             }

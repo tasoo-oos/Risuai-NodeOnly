@@ -1432,7 +1432,7 @@ export const languageChineseTraditional = {
     "showFolderNameInIcon": "在圖示中顯示資料夾名稱",
     "claudeCachingRetrival": "延長 Claude 快取",
     "claudeCachingRetrivalDesc":
-        "每 4 分鐘送出一次請求，以延長 Claude 快取的有效時間。這可降低快取未命中率，但若使用不當，也可能增加成本",
+        "每 4 分鐘送出一次請求，以延長 Claude 快取的有效時間。這可降低快取未命中率，但若使用不當，也可能增加成本。不會套用至預設請求。",
     "automaticCachePoint": "自動快取點",
     "experimentalChatCompression": "實驗性對話資料處理",
     "loadingChatData": "正在載入對話資料",

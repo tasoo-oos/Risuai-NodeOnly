@@ -10,7 +10,7 @@ import { parseKeyValue, sleep } from "../util";
 import { alertError, alertInput, alertNormal, alertSelect } from "../alert";
 import type { OpenAIChat } from "./index.svelte";
 import { HypaProcesser } from "./memory/hypamemory";
-import { requestChatData } from "./request/request";
+import { requestChatData, resolveRequestJob } from "./request/request";
 import { collectStreamingText } from "./request/shared";
 import { generateAIImage } from "./stableDiff";
 import { writeInlayImage } from "./files/inlays";
@@ -1476,13 +1476,14 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                     if(!promptbody){
                         promptbody = [{role:'user', content:effectValue}]
                     }
-                    const result = await requestChatData({
+                    let result = await requestChatData({
                         formated: promptbody,
                         bias: {},
                         useStreaming: false,
                         noMultiGen: true,
                         moduleId: trigger.moduleId,
                     }, 'model')
+                    result = await resolveRequestJob(result)
 
                     if(result.type === 'fail' || result.type === 'streaming' || result.type === 'multiline'){
                         setVar(varName, 'Error: ' + result.result)
@@ -1912,6 +1913,7 @@ export async function runTrigger(char:character,mode:triggerMode, arg:{
                         noMultiGen: true,
                         moduleId: trigger.moduleId,
                     }, effect.model)
+                    result = await resolveRequestJob(result)
 
                     if(result.type === 'fail' || result.type === 'multiline'){
                         setVar(risuChatParser(effect.outputVar, {chara:char}), 'null')
