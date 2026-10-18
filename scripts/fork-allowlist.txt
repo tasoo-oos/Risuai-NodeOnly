@@ -46,12 +46,9 @@ src/ts/preset/adapter/toolLoop.ts
 src/ts/preset/adapter/toolLoop.test.ts
 src/ts/preset/registry/bundled/profiles/anthropic/*.json
 
-# Vertex project from the authenticating credential (upstream PR #101; drop once merged)
-src/ts/preset/adapter/buildRequest.ts
-src/ts/preset/adapter/buildRequest.test.ts
-src/ts/preset/adapter/resolveCredential.ts
-src/ts/preset/adapter/types.ts
-src/ts/preset/adapter/vertexIntegration.test.ts
+# Mobile viewport height re-sync after the keyboard is dismissed with focus kept
+src/ts/viewportHeight.ts
+src/ts/viewportHeight.test.ts
 
 # UI surfaces
 src/lib/ChatScreens/Suggestion.svelte
