@@ -6,6 +6,7 @@ import streamSaver from 'streamsaver';
 import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
 import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, claimLoadingOverlay, chatDeselected } from "./stores.svelte";
+import { applyBodyInterceptors } from "./process/request/bodyInterceptors";
 import { recordDbTransferSize } from "./transferSize";
 import { newSaveTiming, recordSaveSample, type SaveOutcome, type SaveTiming } from "./storage/saveMetrics";
 import { loadPlugins } from "./plugins/plugins.svelte";
@@ -2683,14 +2684,7 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
     else if (typeof arg.body === 'string') {
         let body: string = arg.body
         if(useInterceptor) {
-            for (const interceptor of bodyIntercepterStore) {
-                try {
-                    body = await interceptor.callback(body, arg.interceptor) || body
-                }
-                catch (e) {
-                    console.error(e)
-                }
-            }
+            body = await applyBodyInterceptors(body, arg.interceptor)
         }
         realBody = new TextEncoder().encode(body)
     }

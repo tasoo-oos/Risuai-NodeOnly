@@ -36,6 +36,7 @@ import { TOOL_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "
 import { resolveWireModelId } from "src/ts/preset/adapter/wireInvariants";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError } from "./jobFetch";
+import { withBodyInterceptors } from "./bodyInterceptors";
 import { toLogSource, toRequestKind } from "./logSource";
 import { resolveChatModelBinding, classicModelIdFor, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
@@ -159,7 +160,6 @@ export async function requestChatData(arg:requestDataArgument, model:ModelModeEx
 
     for(let fallbackIndex=0;fallbackIndex<fallBackModels.length;fallbackIndex++){
         let trys = 0
-        arg.formated = safeStructuredClone(originalFormated)
 
         if(fallbackIndex !== 0 && !fallBackModels[fallbackIndex]){
             continue
@@ -173,6 +173,12 @@ export async function requestChatData(arg:requestDataArgument, model:ModelModeEx
                     result: 'Aborted'
                 }
             }
+
+            // Reset per attempt: the before-request replacers and the 'request'
+            // trigger below rewrite arg.formated, so a retry must start from the
+            // original messages or they would be applied again on top of their
+            // own output.
+            arg.formated = safeStructuredClone(originalFormated)
     
             if(pluginV2.replacerbeforeRequest.size > 0){
                 for(const replacer of pluginV2.replacerbeforeRequest){
@@ -793,7 +799,9 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // scope: it rides proxiedFetch directly, and admitting it would let a
     // cachedContents call land where the chat request's usage belongs.
     if (useServerJob) logScope.setRoute('job')
-    const fetchImpl = logScope.wrap(transportFetch)
+    // Body interceptors run outside the log scope so the log records the body
+    // actually sent, as fetchNative's onRealBody does on the classic path.
+    const fetchImpl = withBodyInterceptors(logScope.wrap(transportFetch), `preset_${kind}`)
 
     // Vision gate: send attached images when the adapter implements image wire AND
     // either the profile declares the 'vision' capability OR the user opted in via
