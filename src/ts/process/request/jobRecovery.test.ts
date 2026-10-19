@@ -9,6 +9,7 @@ import { get } from 'svelte/store'
 // util.test.ts stubs the database layer.
 
 const mocks = vi.hoisted(() => ({
+    afterReplacers: new Set<(content: string, type: string) => any>(),
     db: { characters: [] as any[], inlayErrorResponse: true, showRequestStatus: true } as any,
     notifyError: vi.fn(),
     notifyInfo: vi.fn(),
@@ -16,6 +17,9 @@ const mocks = vi.hoisted(() => ({
     saveChatToServer: vi.fn(async () => {}),
 }))
 
+vi.mock('src/ts/plugins/plugins.svelte', () => ({
+    pluginV2: { replacerafterRequest: mocks.afterReplacers },
+}))
 vi.mock('src/ts/globalApi.svelte', () => ({
     forageStorage: { createAuth: async () => 'test-auth' },
 }))
@@ -157,6 +161,7 @@ beforeEach(() => {
     mocks.ensureChatHydrated.mockReset()
     mocks.saveChatToServer.mockReset()
     mocks.saveChatToServer.mockResolvedValue(undefined)
+    mocks.afterReplacers.clear()
 })
 
 afterEach(() => {
@@ -209,6 +214,52 @@ describe('journal decoding', () => {
 // --- terminal job slot-in ---------------------------------------------------
 
 describe('recoverTerminalJob', () => {
+    test('non-streaming job runs the afterRequest replacers before slot-in', async () => {
+        const { recovery } = await loadModules()
+        const chat = makeChat()
+        mocks.db.characters = [makeChar(chat)]
+        const seen: string[] = []
+        mocks.afterReplacers.add(async (content, type) => {
+            seen.push(type)
+            return content.toUpperCase()
+        })
+        setupServer({ journals: { 'job-1': '{"choices":[{"message":{"content":"plain"}}]}' } })
+
+        await recovery.recoverTerminalJob(makeJob({ streaming: false }) as any)
+
+        expect(chat.message).toHaveLength(1)
+        expect(chat.message[0].data).toBe('PLAIN')
+        expect(seen).toEqual(['model'])
+    })
+
+    test('streaming job stays raw: a live streaming run never gets afterRequest replacers', async () => {
+        const { recovery } = await loadModules()
+        const chat = makeChat()
+        mocks.db.characters = [makeChar(chat)]
+        const replacer = vi.fn(async (content: string) => content.toUpperCase())
+        mocks.afterReplacers.add(replacer)
+        setupServer({ journals: { 'job-1': OPENAI_SSE } })
+
+        await recovery.recoverTerminalJob(makeJob() as any)
+
+        expect(chat.message[0].data).toBe('Hello')
+        expect(replacer).not.toHaveBeenCalled()
+    })
+
+    test('a throwing afterRequest replacer is skipped without losing the response', async () => {
+        const { recovery } = await loadModules()
+        const chat = makeChat()
+        mocks.db.characters = [makeChar(chat)]
+        mocks.afterReplacers.add(async () => { throw new Error('plugin bug') })
+        mocks.afterReplacers.add(async (content) => `${content}!`)
+        const { claims } = setupServer({ journals: { 'job-1': '{"choices":[{"message":{"content":"plain"}}]}' } })
+
+        await recovery.recoverTerminalJob(makeJob({ streaming: false }) as any)
+
+        expect(chat.message[0].data).toBe('plain!')
+        expect(claims()).toEqual(['/api/model-jobs/job-1/claim'])
+    })
+
     test('done job slots exactly one char message with generationInfo, then claims', async () => {
         const { recovery } = await loadModules()
         const chat = makeChat()
