@@ -50,7 +50,10 @@ vi.mock('./modules', () => ({
 vi.mock('./files/inlays', () => ({ getInlayAsset: vi.fn(), writeInlayImage: vi.fn() }))
 vi.mock('./lorebook.svelte', () => ({ loadLoreBookV3Prompt: vi.fn() }))
 vi.mock('./memory/hypamemory', () => ({ HypaProcesser: vi.fn() }))
-vi.mock('./request/request', () => ({ requestChatData: vi.fn(async () => ({ type: 'success', result: 'ok' })) }))
+vi.mock('./request/request', () => ({
+  requestChatData: vi.fn(async () => ({ type: 'success', result: 'ok' })),
+  resolveRequestJob: vi.fn(async (result) => result),
+}))
 vi.mock('./stableDiff', () => ({ generateAIImage: vi.fn() }))
 
 let runScripted: typeof import('./scriptings').runScripted
