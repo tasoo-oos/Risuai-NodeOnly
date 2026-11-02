@@ -12,6 +12,7 @@
     import SelectInput from "src/lib/UI/GUI/SelectInput.svelte";
     import OptionInput from "src/lib/UI/GUI/OptionInput.svelte";
     import NumberInput from "src/lib/UI/GUI/NumberInput.svelte";
+    import SegmentedControl from "src/lib/UI/GUI/SegmentedControl.svelte";
     import { tokenizerList } from "src/ts/tokenizer";
     import ModelPresetBasicInfo from "./ModelPresetBasicInfo.svelte";
     import ApiKeyPoolManager from "./ApiKeyPoolManager.svelte";
@@ -25,7 +26,7 @@
     import { testModelPreset, type ModelPresetTestResult } from "src/ts/process/request/request";
     import { getOfficialRegistry, getPresetUpdateStatus, syncRemoteRegistry } from "src/ts/preset/registry";
     import { buildSeenMap, computeRegistryNotice, noticeCount } from "src/ts/preset/registry/notice";
-    import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS } from "src/ts/preset/types";
+    import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AnthropicCacheTtl } from "src/ts/preset/types";
     import { onMount } from "svelte";
     import { v4 as uuidv4 } from "uuid";
 
@@ -106,6 +107,17 @@
         && (editingPreset.profileSnapshot.capabilities ?? []).includes('cache')
         && editingPreset.profileSnapshot.adapterKind === 'google-gemini'
     );
+
+    // Anthropic prompt-cache mode. Any anthropic-messages preset can use it (the
+    // breakpoints are plain cache_control markers, no capability flag needed).
+    const showAnthropicCacheSection = $derived(
+        !!editingPreset && editingPreset.profileSnapshot.adapterKind === 'anthropic-messages'
+    );
+    const anthropicCacheOptions = $derived([
+        { value: 'off', label: language.modelPresetAnthropicCacheOff },
+        { value: '5m', label: language.modelPresetAnthropicCache5m },
+        { value: '1h', label: language.modelPresetAnthropicCache1h },
+    ]);
 
     // Open a freshly-created preset directly in its editor.
     $effect(() => {
@@ -369,6 +381,23 @@
                                 </div>
                             </ShAccordion>
                         {/if}
+                    </div>
+                {/if}
+                {#if showAnthropicCacheSection}
+                    <div class="flex flex-col gap-4 mb-6">
+                        <h3 class="text-sm font-semibold text-textcolor2 uppercase tracking-wide">{language.modelPresetAnthropicCacheSection}</h3>
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="flex flex-col gap-0.5 min-w-0">
+                                <span class="text-sm text-textcolor">{language.modelPresetAnthropicCache}</span>
+                                <span class="text-xs text-textcolor2">{language.modelPresetAnthropicCacheHelp}</span>
+                            </div>
+                            <SegmentedControl
+                                bind:value={() => editingPreset!.anthropicCacheTtl ?? '5m', (v) => { editingPreset!.anthropicCacheTtl = v as AnthropicCacheTtl }}
+                                size="sm"
+                                className="shrink-0 mb-0!"
+                                options={anthropicCacheOptions}
+                            />
+                        </div>
                     </div>
                 {/if}
                 <SchemaFormRenderer
