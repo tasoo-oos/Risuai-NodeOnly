@@ -10,6 +10,7 @@ import { makeStateProxy, observeReactive } from './proxyFixture.svelte'
 // the raw-write mistake fails here instead of on a phone.
 
 const mocks = vi.hoisted(() => ({
+    afterReplacers: new Set<(content: string, type: string) => any>(),
     db: null as any,
     hydrate: null as any,
     // Captures what the post-slot-in save would serialize — a raw-object write
@@ -17,6 +18,9 @@ const mocks = vi.hoisted(() => ({
     saved: [] as any[],
 }))
 
+vi.mock('src/ts/plugins/plugins.svelte', () => ({
+    pluginV2: { replacerafterRequest: mocks.afterReplacers },
+}))
 vi.mock('src/ts/globalApi.svelte', () => ({
     forageStorage: { createAuth: async () => 'test-auth' },
 }))

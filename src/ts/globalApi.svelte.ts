@@ -5,7 +5,8 @@ import { get } from "svelte/store";
 import streamSaver from 'streamsaver';
 import { setDatabase, type Database, defaultSdDataFunc, getDatabase, appVer, nodeOnlyVer, getCurrentCharacter, loadTogglesFromChat } from "./storage/database.svelte";
 import { checkRisuUpdate } from "./update";
-import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, bodyIntercepterStore, claimLoadingOverlay, chatDeselected } from "./stores.svelte";
+import { MobileGUI, botMakerMode, selectedCharID, loadedStore, DBState, LoadingStatusState, selIdState, ReloadGUIPointer, claimLoadingOverlay, chatDeselected } from "./stores.svelte";
+import { applyBodyInterceptors, applyBodyInterceptorsToValue } from "./process/request/bodyInterceptors";
 import { recordDbTransferSize } from "./transferSize";
 import { newSaveTiming, recordSaveSample, type SaveOutcome, type SaveTiming } from "./storage/saveMetrics";
 import { loadPlugins } from "./plugins/plugins.svelte";
@@ -1924,14 +1925,7 @@ export async function globalFetch(url: string, arg: GlobalFetchArgs = {}): Promi
         const forcePlainFetch = ((knownHostes.includes(urlHost)) || db.usePlainFetch || arg.plainFetchForce) && !arg.plainFetchDeforce && !useLocalNetworkRoute
 
         if(arg.interceptor){
-            for (const interceptor of bodyIntercepterStore) {
-                try {
-                    arg.body = await interceptor.callback(arg.body, arg.interceptor) || arg.body
-                }
-                catch (e) {
-                    console.error(e)
-                }
-            }
+            arg.body = await applyBodyInterceptorsToValue(arg.body, arg.interceptor)
         }
 
         const timeoutSignal = buildTimeoutSignal(arg.abortSignal, arg.requestTimeoutMs)
@@ -2783,14 +2777,7 @@ async function fetchNativeRaw(url: string, arg: FetchNativeArgs, hooks?: {
     else if (typeof arg.body === 'string') {
         let body: string = arg.body
         if(useInterceptor) {
-            for (const interceptor of bodyIntercepterStore) {
-                try {
-                    body = await interceptor.callback(body, arg.interceptor) || body
-                }
-                catch (e) {
-                    console.error(e)
-                }
-            }
+            body = await applyBodyInterceptors(body, arg.interceptor)
         }
         realBody = new TextEncoder().encode(body)
     }
