@@ -175,6 +175,8 @@ describe('makeJobFetch', () => {
             outputTokens: 512,
             maxContext: 32768,
             streaming: true,
+            decoupledStreaming: false,
+            escapeOutput: false,
             timeoutMs: 60_000,
         })
         // Claim is fire-and-forget after the verified-done close.

@@ -246,6 +246,44 @@ describe('recoverTerminalJob', () => {
         expect(replacer).not.toHaveBeenCalled()
     })
 
+    test('decoupled-streaming job gets the replacers: the live run returns one whole result', async () => {
+        const { recovery } = await loadModules()
+        const chat = makeChat()
+        mocks.db.characters = [makeChar(chat)]
+        mocks.afterReplacers.add(async (content) => content.toUpperCase())
+        setupServer({ journals: { 'job-1': OPENAI_SSE } })
+
+        await recovery.recoverTerminalJob(makeJob({ decoupledStreaming: true }) as any)
+
+        expect(chat.message[0].data).toBe('HELLO')
+    })
+
+    test('escapeOutput job is escaped before the replacers, as requestChatData does', async () => {
+        const { recovery } = await loadModules()
+        const chat = makeChat()
+        mocks.db.characters = [makeChar(chat)]
+        const seen: string[] = []
+        mocks.afterReplacers.add(async (content) => { seen.push(content); return `${content}!` })
+        setupServer({ journals: { 'job-1': '{"choices":[{"message":{"content":"{{x}} (y)"}}]}' } })
+
+        await recovery.recoverTerminalJob(makeJob({ streaming: false, escapeOutput: true }) as any)
+
+        const escaped = '\uE9B8\uE9B8x\uE9B9\uE9B9 \uE9BAy\uE9BB'
+        expect(seen).toEqual([escaped])
+        expect(chat.message[0].data).toBe(`${escaped}!`)
+    })
+
+    test('escapeOutput is ignored on a plain streaming job, which the live run never escapes', async () => {
+        const { recovery } = await loadModules()
+        const chat = makeChat()
+        mocks.db.characters = [makeChar(chat)]
+        setupServer({ journals: { 'job-1': 'data: {"choices":[{"delta":{"content":"{a}"}}]}\n\ndata: [DONE]\n\n' } })
+
+        await recovery.recoverTerminalJob(makeJob({ escapeOutput: true }) as any)
+
+        expect(chat.message[0].data).toBe('{a}')
+    })
+
     test('a throwing afterRequest replacer is skipped without losing the response', async () => {
         const { recovery } = await loadModules()
         const chat = makeChat()

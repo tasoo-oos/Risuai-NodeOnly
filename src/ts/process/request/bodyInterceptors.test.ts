@@ -8,7 +8,7 @@ vi.mock('src/ts/stores.svelte', () => ({
     bodyIntercepterStore: mocks.store,
 }))
 
-import { applyBodyInterceptors, withBodyInterceptors } from './bodyInterceptors'
+import { applyBodyInterceptors, applyBodyInterceptorsToValue, withBodyInterceptors } from './bodyInterceptors'
 
 afterEach(() => {
     mocks.store.length = 0
@@ -71,6 +71,37 @@ describe('applyBodyInterceptors', () => {
             { callback: (body) => `${body}&c=3` },
         ])
         expect(out).toBe('a=1&b=2&c=3')
+    })
+})
+
+describe('applyBodyInterceptorsToValue (globalFetch)', () => {
+    test('an object body stays an object; string-based callbacks get the retry too', async () => {
+        const body = { model: 'old', temperature: 1 }
+        const out = await applyBodyInterceptorsToValue(body, 'openai_basic', [
+            { callback: (b) => { b.temperature = 0.5; return b } },
+            { callback: (b: string) => b.replace('old', 'new') },
+        ])
+        expect(out).toEqual({ model: 'new', temperature: 0.5 })
+    })
+
+    test('a string body stays a string', async () => {
+        const out = await applyBodyInterceptorsToValue('{"a":1}', 't', [
+            { callback: (b) => ({ ...b, b: 2 }) },
+        ])
+        expect(typeof out).toBe('string')
+        expect(JSON.parse(out as string)).toEqual({ a: 1, b: 2 })
+    })
+
+    test('a non-JSON body is handed over as-is and never stringified for a retry', async () => {
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        const form = new FormData()
+        const seen: unknown[] = []
+        const out = await applyBodyInterceptorsToValue(form, 't', [
+            { callback: (b) => { seen.push(b); throw new Error('nope') } },
+        ])
+        expect(out).toBe(form)
+        expect(seen).toEqual([form])
+        errorSpy.mockRestore()
     })
 })
 

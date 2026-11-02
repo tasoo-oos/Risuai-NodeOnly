@@ -23,6 +23,7 @@ import { getModelInfo } from '../model/modellist';
 import { registerCBS, type matcherArg, type RegisterCallback } from '../cbs';
 import cssSelectorParser from 'postcss-selector-parser'
 import { Sha256 } from '@aws-crypto/sha256-js'
+import { risuEscape } from './escape'
 
 const markdownItOptions = {
     html: true,
@@ -140,17 +141,7 @@ export function risuUnescape(text:string){
     })
 }
 
-export function risuEscape(text:string){
-    return text.replace(/[{}()]/g, (f) => {
-        switch(f){
-            case '{': return '\uE9B8'
-            case '}': return '\uE9B9'
-            case '(': return '\uE9BA'
-            case ')': return '\uE9BB'
-            default: return f
-        }
-    })
-}
+export { risuEscape }
 
 function renderMarkdown(md:markdownit, data:string){
     let quotes = ['“', '”', '‘', '’']

@@ -1145,6 +1145,8 @@ if (interceptor) {
 }
 ```
 
+The callback receives the parsed JSON body; return the modified body (object or JSON string), or a falsy value to keep it. A callback that throws on the object is retried once with the JSON string. `type` names the request path: classic providers use tags such as `openai_streaming`, `anthropic_streaming` or `gemini_base`, while model-preset requests (including server-side jobs) use `preset_<adapterKind>` (`preset_openai-compatible`, `preset_anthropic-messages`, `preset_google-gemini`).
+
 ### Plugin Lifecycle
 
 #### Cleanup on Unload

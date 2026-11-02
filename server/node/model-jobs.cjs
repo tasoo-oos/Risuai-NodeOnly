@@ -182,6 +182,8 @@ function createModelJobs(opts = {}) {
             input_tokens INTEGER,
             output_tokens INTEGER,
             max_context INTEGER,
+            decoupled_streaming INTEGER NOT NULL DEFAULT 0,
+            escape_output INTEGER NOT NULL DEFAULT 0,
             status TEXT NOT NULL,
             upstream_status INTEGER,
             content_type TEXT,
@@ -220,6 +222,16 @@ function createModelJobs(opts = {}) {
     try {
         db.exec(`ALTER TABLE model_jobs ADD COLUMN max_context INTEGER`);
     } catch { /* column already present */ }
+    // Client post-processing facts, so a recovered response gets the same
+    // after-request steps the live run would have applied (jobRecovery.ts):
+    // a decoupled-streaming run and an escapeOutput run both return a whole
+    // result, which the live path escapes / runs plugin replacers over.
+    try {
+        db.exec(`ALTER TABLE model_jobs ADD COLUMN decoupled_streaming INTEGER NOT NULL DEFAULT 0`);
+    } catch { /* column already present */ }
+    try {
+        db.exec(`ALTER TABLE model_jobs ADD COLUMN escape_output INTEGER NOT NULL DEFAULT 0`);
+    } catch { /* column already present */ }
 
     // Resumable sends: one tombstone per chat marking "a send was started here
     // and has not concluded". Holds NO pipeline state — the send's durable
@@ -236,8 +248,8 @@ function createModelJobs(opts = {}) {
     `);
 
     const stmtInsert = db.prepare(`
-        INSERT INTO model_jobs (id, chat_id, generation_id, adapter_kind, model, model_label, target_origin, kind, streaming, input_tokens, output_tokens, max_context, status, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
+        INSERT INTO model_jobs (id, chat_id, generation_id, adapter_kind, model, model_label, target_origin, kind, streaming, input_tokens, output_tokens, max_context, decoupled_streaming, escape_output, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
     `);
     const stmtGet = db.prepare(`SELECT * FROM model_jobs WHERE id = ?`);
     const stmtRunningForChat = db.prepare(`SELECT id, generation_id FROM model_jobs WHERE chat_id = ? AND status = 'running' AND kind = 'main' LIMIT 1`);
@@ -345,6 +357,8 @@ function createModelJobs(opts = {}) {
             inputTokens: row.input_tokens ?? undefined,
             outputTokens: row.output_tokens ?? undefined,
             maxContext: row.max_context ?? undefined,
+            decoupledStreaming: !!row.decoupled_streaming,
+            escapeOutput: !!row.escape_output,
             claimed: !!row.claimed
         };
     }
@@ -541,6 +555,8 @@ function createModelJobs(opts = {}) {
             Number.isFinite(arg.inputTokens) ? Math.max(0, Math.round(arg.inputTokens)) : null,
             Number.isFinite(arg.outputTokens) ? Math.max(0, Math.round(arg.outputTokens)) : null,
             Number.isFinite(arg.maxContext) ? Math.max(0, Math.round(arg.maxContext)) : null,
+            arg.decoupledStreaming ? 1 : 0,
+            arg.escapeOutput ? 1 : 0,
             Date.now()
         );
         activeJobs.set(jobId, job);
@@ -686,6 +702,8 @@ function createModelJobs(opts = {}) {
                 maxContext: req.body?.maxContext,
                 kind: req.body?.kind,
                 streaming: !!req.body?.streaming,
+                decoupledStreaming: !!req.body?.decoupledStreaming,
+                escapeOutput: !!req.body?.escapeOutput,
                 timeoutMs: req.body?.timeoutMs
             });
             if (result.error) {

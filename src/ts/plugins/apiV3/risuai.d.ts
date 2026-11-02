@@ -1972,6 +1972,15 @@ interface RisuaiPluginAPI {
      * Sensitive fields like API keys are excluded from the body passed to the callback.
      * Requires 'replacer' permission.
      *
+     * The body is the parsed JSON object. Return the modified body (object or JSON string);
+     * a falsy return keeps it unchanged. A callback that throws on the object is retried once
+     * with the JSON string, for interceptors written against string bodies.
+     *
+     * `type` names the request path: classic providers use tags such as `openai_streaming`,
+     * `anthropic_streaming` or `gemini_base`; model-preset requests (including server-side
+     * jobs) use `preset_<adapterKind>`, e.g. `preset_openai-compatible`,
+     * `preset_anthropic-messages`, `preset_google-gemini`.
+     *
      * @param callback - Function that receives the request body and request type, and returns the modified body
      * @returns Object with an `id` for later unregistration, or null if permission was denied
      *

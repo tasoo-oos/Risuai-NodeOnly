@@ -11,40 +11,75 @@ function parseJsonBody(body: string): unknown {
     }
 }
 
-// Runs the plugin body interceptors (registerBodyIntercepter) over a JSON
-// request body that is already serialized. The plugin API documents the
-// callback as receiving the parsed body object (risuai.d.ts), which is what
-// globalFetch has always passed; string-body call sites (fetchNative) used to
-// pass the raw JSON string instead, so a plugin written to the documented API
-// silently did nothing there. Callbacks now get the object, and one that throws
-// on it is retried once with the string form so plugins written against the
-// old string behavior keep working. A falsy return keeps the current body,
-// matching the old `callback(...) || body` contract.
+function isJsonContainer(value: unknown): value is object {
+    if (value === null || typeof value !== 'object') return false
+    if (Array.isArray(value)) return true
+    const proto = Object.getPrototypeOf(value)
+    return proto === Object.prototype || proto === null
+}
+
+function normalizeOutput(out: unknown): unknown {
+    return typeof out === 'string' ? parseJsonBody(out) : out
+}
+
+// The plugin API documents the callback as receiving the parsed body object
+// (risuai.d.ts), which is what globalFetch has always passed; string-body call
+// sites (fetchNative) used to pass the raw JSON string instead, so a plugin
+// written to the documented API silently did nothing there. Callbacks now get
+// the object everywhere, and one that throws on it is retried once with the
+// JSON string so plugins written against the old string behavior keep
+// working. A falsy return keeps the current body, matching the old
+// `callback(...) || body` contract. Non-JSON bodies (FormData, bytes, a
+// non-JSON string) are passed through as-is, with no retry.
+async function runInterceptors(
+    initial: unknown,
+    type: string,
+    interceptors: readonly BodyInterceptor[],
+): Promise<unknown> {
+    let current = initial
+    for (const interceptor of interceptors) {
+        try {
+            const out = await interceptor.callback(current, type)
+            if (out) current = normalizeOutput(out)
+        } catch (err) {
+            if (!isJsonContainer(current)) {
+                console.error(err)
+                continue
+            }
+            try {
+                const out = await interceptor.callback(JSON.stringify(current), type)
+                if (out) current = normalizeOutput(out)
+            } catch (retryErr) {
+                console.error(retryErr)
+            }
+        }
+    }
+    return current
+}
+
+// Serialized-body form (fetchNative and the preset transports): the result is
+// re-serialized, so the caller always gets a string back.
 export async function applyBodyInterceptors(
     body: string,
     type: string,
     interceptors: readonly BodyInterceptor[] = bodyIntercepterStore,
 ): Promise<string> {
     if (interceptors.length === 0) return body
-    let current = parseJsonBody(body)
-    for (const interceptor of interceptors) {
-        try {
-            const out = await interceptor.callback(current, type)
-            if (out) current = typeof out === 'string' ? parseJsonBody(out) : out
-        } catch (err) {
-            if (typeof current === 'string') {
-                console.error(err)
-                continue
-            }
-            try {
-                const out = await interceptor.callback(JSON.stringify(current), type)
-                if (out) current = typeof out === 'string' ? parseJsonBody(out) : out
-            } catch (retryErr) {
-                console.error(retryErr)
-            }
-        }
-    }
-    return typeof current === 'string' ? current : JSON.stringify(current)
+    const out = await runInterceptors(parseJsonBody(body), type, interceptors)
+    return typeof out === 'string' ? out : JSON.stringify(out)
+}
+
+// Unserialized-body form (globalFetch, which serializes later): a string body
+// stays a string and an object body stays an object unless an interceptor
+// returns a non-JSON string.
+export async function applyBodyInterceptorsToValue(
+    body: unknown,
+    type: string,
+    interceptors: readonly BodyInterceptor[] = bodyIntercepterStore,
+): Promise<unknown> {
+    if (interceptors.length === 0) return body
+    if (typeof body === 'string') return applyBodyInterceptors(body, type, interceptors)
+    return runInterceptors(body, type, interceptors)
 }
 
 // fetch wrapper for the model-preset transports (proxied and server-job).

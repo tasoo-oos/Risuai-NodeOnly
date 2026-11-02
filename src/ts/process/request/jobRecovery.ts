@@ -10,6 +10,7 @@ import { chatGenKey, endGeneration, generationStates, registerAbort, startGenera
 import { getGenerationModelString } from 'src/ts/process/models/modelString'
 import { clearStatus, endStatus, startStatus } from 'src/ts/status/requestStatus'
 import { pluginV2 } from 'src/ts/plugins/plugins.svelte'
+import { risuEscape } from 'src/ts/parser/escape'
 import { authHeader } from './jobFetch'
 import { clearPendingSend, listPendingSends, markResumable, resumableSends, type PendingSendRecord } from './pendingSends'
 import { parseSseStream } from 'src/ts/preset/adapter/sse'
@@ -43,10 +44,11 @@ import type { AdapterChatStreamDelta, AdapterUsage } from 'src/ts/preset/adapter
 // live run would have saved). Live-generation extras — editoutput scripts,
 // triggers, emotion detection, translate, TTS, auto-continue — are not
 // replayed: they are live-pipeline behavior, and re-running them out of band
-// could fire side effects on a chat the user is not even looking at. Plugin
-// afterRequest replacers are the exception: they are pure text transforms that
-// a live non-streaming run applies before the text reaches the chat, so a
-// recovered non-streaming response gets them too (applyAfterRequestReplacers).
+// could fire side effects on a chat the user is not even looking at. The
+// requestChatData post-processing of a whole result is the exception: the
+// escapeOutput escape and the plugin afterRequest replacers are pure text
+// transforms the live run applies before the text reaches the chat, so a
+// recovered response gets them too (applyLivePostProcess).
 
 export interface ModelJobRecord {
     id: string
@@ -65,6 +67,11 @@ export interface ModelJobRecord {
     createdAt?: number
     endedAt?: number
     streaming?: boolean
+    /** Live run drained its stream into one whole result (absent on jobs
+     *  from older builds: treated as a plain streaming run). */
+    decoupledStreaming?: boolean
+    /** Live run escaped the whole result (chat escapeOutput). */
+    escapeOutput?: boolean
     status: 'running' | 'done' | 'failed' | 'aborted'
     upstreamStatus?: number | null
     error?: string
@@ -404,13 +411,20 @@ function recordJobRecoveryLog(
     })
 }
 
-// requestChatData runs the afterRequest replacers on a 'success' result only,
-// which a streaming run never is, so only non-streaming jobs get them here —
-// the recovered text then matches what the live run would have saved. A
-// throwing replacer is skipped rather than losing the recovered response.
-async function applyAfterRequestReplacers(job: ModelJobRecord, text: string): Promise<string> {
-    if (job.streaming) return text
-    let out = text
+// requestChatData post-processes a 'success' result only — risuEscape when
+// the chat escapes output, then the afterRequest replacers, in that order. A
+// non-streaming run and a decoupled-streaming run (drained into one result)
+// return 'success'; a plain streaming run returns the stream and gets neither.
+// Mirroring that here makes the recovered text match what the live run would
+// have saved. A throwing replacer is skipped rather than losing the recovered
+// response.
+function returnsWholeResult(job: Pick<ModelJobRecord, 'streaming' | 'decoupledStreaming'>): boolean {
+    return !job.streaming || job.decoupledStreaming === true
+}
+
+async function applyLivePostProcess(job: ModelJobRecord, text: string): Promise<string> {
+    if (!returnsWholeResult(job)) return text
+    let out = job.escapeOutput === true ? risuEscape(text) : text
     for (const replacer of pluginV2.replacerafterRequest) {
         try {
             const replaced = await replacer(out, 'model')
@@ -525,7 +539,7 @@ export async function recoverTerminalJob(job: ModelJobRecord): Promise<void> {
     recordJobRecoveryLog(job, result)
     let mutated = false
     if (result.ok === true) {
-        result.text = await applyAfterRequestReplacers(job, result.text)
+        result.text = await applyLivePostProcess(job, result.text)
         if (existingIdx === -1) {
             insertRecoveredMessage(loc, job, result.text, result.usage)
             mutated = true

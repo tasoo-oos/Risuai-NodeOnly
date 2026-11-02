@@ -785,6 +785,12 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             maxContext: arg.generationInfo?.maxContext,
             jobKind: arg.realChatId ? 'main' : 'aux',
             streaming: resolvePresetStreaming(preset, arg),
+            // requestChatData post-processes a whole ('success') result —
+            // escape, then the afterRequest replacers. Recovery needs to know
+            // whether this run produces one, which `streaming` alone misses
+            // for decoupled streaming.
+            decoupledStreaming: resolvePresetStreaming(preset, arg) && preset.decoupledStreaming === true,
+            escapeOutput: arg.escape === true,
             timeoutMs: (getDatabase().localNetworkTimeoutSec ?? 600) * 1000,
             fallbackFetch: proxiedFetch,
         })
