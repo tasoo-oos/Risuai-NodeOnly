@@ -74,3 +74,7 @@ src/ts/process/request/promptShaping.test.ts
 src/ts/process/request/promptShaping.ts
 src/ts/tokenizer.test.ts
 src/ts/tokenizer.ts
+
+# Per-preset Anthropic prompt-cache mode
+src/ts/preset/adapter/anthropicMessages.test.ts
+src/ts/preset/adapter/types.ts
