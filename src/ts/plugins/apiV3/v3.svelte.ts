@@ -28,6 +28,7 @@ import { processScriptFull, type ScriptMode } from "src/ts/process/scripts";
 import { getModelInfo } from "src/ts/model/modellist";
 import type { ModelModeExtended } from "src/ts/process/request/shared";
 import { requestChatDataMain } from "src/ts/process/request/request";
+import { resolveRequestJob } from "src/ts/process/request/providerJob";
 import type { OpenAIChat } from "src/ts/process/index.svelte";
 import { getModuleLorebooks } from "src/ts/process/modules";
 import { hydratePluginCharacterSnapshot, hydratePluginDatabaseSnapshot, restorePluginCharacterManifest } from "../pluginCharacterSnapshot";
@@ -1493,7 +1494,10 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
             staticModel?: string
             allowPlugins?: boolean
         }) => {
-            return requestChatDataMain({
+            // A ModelPreset bound to this mode may answer with a provider job
+            // (an Anthropic batch). Plugins expect a plain response, so wait it
+            // out here; otherwise the batch runs (and bills) unobserved.
+            return resolveRequestJob(await requestChatDataMain({
                 formated: options.messages,
                 bias: {},
                 staticModel: options.staticModel,
@@ -1506,7 +1510,7 @@ const makeRisuaiAPIV3 = (iframe:HTMLIFrameElement,plugin:RisuPlugin) => {
                 // explicitly with `allowPlugins: true`, accepting responsibility
                 // for avoiding provider-to-provider call loops.
                 blockPlugins: !options.allowPlugins,
-            }, options.mode)
+            }, options.mode))
         },
         sendChat: async (message: string) => {
             const conf = await getPermission('sendChat');
