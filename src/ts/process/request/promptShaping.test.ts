@@ -42,6 +42,7 @@ describe('prompt shaping of a ModelPreset chat ignores the global classic model'
                 addStartNewChatMarker: true,
                 addContinueMarker: false,
                 mergeSystemPrompts: false,
+                autoCachePoint: false,
             })
         },
     )
@@ -57,6 +58,7 @@ describe('classic chats keep the model-id heuristics', () => {
             addStartNewChatMarker: true,
             addContinueMarker: true,
             mergeSystemPrompts: true,
+            autoCachePoint: false,
         })
     })
 
@@ -65,5 +67,56 @@ describe('classic chats keep the model-id heuristics', () => {
         const shaping = resolvePromptShaping(resolveMainPromptTarget(classicChat))
         expect(shaping.addStartNewChatMarker).toBe(false)
         expect(shaping.tokenizerTarget).toBe('novelai')
+    })
+})
+
+describe('automatic cache point', () => {
+    const ANTHROPIC = {
+        ...PRESET,
+        id: 'p-anthropic',
+        profileSnapshot: { adapterKind: 'anthropic-messages', schema: [] },
+    } as any
+
+    function shapingFor(preset: any) {
+        mockDb.modelPresets = [preset]
+        const modelBinding = emptyModelBinding()
+        modelBinding.main = preset.id
+        return resolvePromptShaping(resolveMainPromptTarget({ useModelPreset: true, modelBinding } as any))
+    }
+
+    test.each([true, false])('classic chats follow db.automaticCachePoint = %s', (global) => {
+        mockDb.automaticCachePoint = global
+        expect(resolvePromptShaping(resolveMainPromptTarget(classicChat)).autoCachePoint).toBe(global)
+    })
+
+    test('a preset with the field unset stays off even when the global is on', () => {
+        mockDb.automaticCachePoint = true
+        expect(shapingFor(ANTHROPIC).autoCachePoint).toBe(false)
+    })
+
+    test('a preset with the field on applies even when the global is off', () => {
+        mockDb.automaticCachePoint = false
+        expect(shapingFor({ ...ANTHROPIC, automaticCachePoint: true }).autoCachePoint).toBe(true)
+    })
+
+    test('openai-compatible presets never mark cache points (the adapter ignores them)', () => {
+        mockDb.automaticCachePoint = true
+        expect(shapingFor({ ...PRESET, automaticCachePoint: true }).autoCachePoint).toBe(false)
+    })
+
+    test('google-gemini presets only mark cache points while their context caching is on', () => {
+        const gemini = {
+            ...PRESET,
+            id: 'p-gemini',
+            automaticCachePoint: true,
+            profileSnapshot: { adapterKind: 'google-gemini', capabilities: ['cache'], schema: [] },
+        }
+        expect(shapingFor(gemini).autoCachePoint).toBe(false)
+        expect(shapingFor({ ...gemini, promptCaching: { enabled: true } }).autoCachePoint).toBe(true)
+        expect(shapingFor({
+            ...gemini,
+            promptCaching: { enabled: true },
+            profileSnapshot: { ...gemini.profileSnapshot, capabilities: [] },
+        }).autoCachePoint).toBe(false)
     })
 })

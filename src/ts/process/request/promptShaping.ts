@@ -1,5 +1,5 @@
 import { getDatabase, type Chat } from 'src/ts/storage/database.svelte'
-import type { ModelPreset } from 'src/ts/preset/types'
+import { presetConsumesCachePoint, type ModelPreset } from 'src/ts/preset/types'
 import { classicModelIdFor, resolveChatModelBinding, resolvePresetTokenizer } from './modelPresetBinding'
 
 /**
@@ -41,6 +41,13 @@ export interface PromptShaping {
     addContinueMarker: boolean
     /** Merge consecutive system prompts that share memo and name. */
     mergeSystemPrompts: boolean
+    /**
+     * Mark the last three user messages of the chat block as cachePoint when
+     * the prompt template has no cache card. Classic: db.automaticCachePoint.
+     * ModelPreset: the preset's own automaticCachePoint (unset = off), and only
+     * where the preset consumes cachePoint at all.
+     */
+    autoCachePoint: boolean
 }
 
 export function resolvePromptShaping(target: MainPromptTarget): PromptShaping {
@@ -52,6 +59,7 @@ export function resolvePromptShaping(target: MainPromptTarget): PromptShaping {
             addStartNewChatMarker: true,
             addContinueMarker: false,
             mergeSystemPrompts: false,
+            autoCachePoint: target.preset.automaticCachePoint === true && presetConsumesCachePoint(target.preset),
         }
     }
     const model = target.model ?? ''
@@ -63,5 +71,6 @@ export function resolvePromptShaping(target: MainPromptTarget): PromptShaping {
         addStartNewChatMarker: !model.startsWith('novelai'),
         addContinueMarker: model.startsWith('claude') || isGpt || model.startsWith('openrouter') || model.startsWith('reverse_proxy'),
         mergeSystemPrompts: isGpt || model.startsWith('claude') || model === 'openrouter' || model === 'reverse_proxy',
+        autoCachePoint: getDatabase().automaticCachePoint === true,
     }
 }

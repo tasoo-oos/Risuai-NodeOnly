@@ -26,6 +26,27 @@ export const VISION_CAPABLE_ADAPTER_KINDS: readonly AdapterKind[] = [
     'google-gemini',
 ]
 
+// Whether a preset's request consumes message.cachePoint, i.e. whether its
+// automaticCachePoint toggle can do anything. anthropic-messages always turns
+// cachePoint into cache_control breakpoints; google-gemini only uses it as the
+// context-cache boundary while the preset's own context caching is on (and the
+// profile declares 'cache', the same gate requestModelPreset applies);
+// openai-compatible ignores it. Shared by sendChat and the preset editor.
+export function presetConsumesCachePoint(preset: {
+    profileSnapshot?: { adapterKind?: AdapterKind; capabilities?: readonly string[] }
+    promptCaching?: { enabled?: boolean }
+}): boolean {
+    switch (preset.profileSnapshot?.adapterKind) {
+        case 'anthropic-messages':
+            return true
+        case 'google-gemini':
+            return preset.promptCaching?.enabled === true
+                && (preset.profileSnapshot.capabilities ?? []).includes('cache')
+        default:
+            return false
+    }
+}
+
 export type AuthKind =
     | 'none'
     | 'bearer'
@@ -336,6 +357,12 @@ export interface ModelPreset {
     // requests byte-identical to before. Runtime cache state lives in
     // localStorage, never in the db.
     promptCaching?: GeminiPromptCachingConfig
+    // Per-ModelPreset replacement for the global db.automaticCachePoint: when
+    // the prompt template has no cache card, mark the last three user messages
+    // of the chat block as cachePoint. Unset/false = off (the global's factory
+    // default); the global switch never reaches a preset request. Only takes
+    // effect where presetConsumesCachePoint() holds.
+    automaticCachePoint?: boolean
     apiKeyRef?: string
     inlineCredential?: unknown
     fallbackModelPresetIds?: string[]

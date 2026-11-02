@@ -1421,7 +1421,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     }
                     pushPrompts(chats)
 
-                    if(DBState.db.automaticCachePoint && !hasCachePoint){
+                    if(promptShaping.autoCachePoint && !hasCachePoint){
                         let pointer = formated.length - 1
                         let depthRemaining = 3
                         while(pointer >= 0){

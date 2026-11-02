@@ -109,7 +109,7 @@ export const helpCn = {
         "presetChain": "如果不为空，每次用户在此输入框预设列表中的消息时，预设将会更改并随机应用。预设列表应以逗号分隔，例如 `preset1,preset2`。",
         "legacyMediaFindings": "启用后，将使用旧方法查找媒体资源，而不使用额外的搜索算法。",
         "comfyWorkflow": "输入 Comfy UI 的 API 工作流。您可以通过点击“工作流 > 导出 (API)”按钮在 Comfy UI 中获取您的 API 工作流。您还必须在工作流文本中放入 {{risu_prompt}}。{{risu_prompt}} 将被替换为 Risu 提供的提示词。",
-        "automaticCachePoint": "如果缓存点不存在，则在聊天结束后自动创建缓存点。",
+        "automaticCachePoint": "如果缓存点不存在，则在聊天结束后自动创建缓存点。使用模型预设的聊天会改用该预设自己的自动缓存点设置。",
         "experimentalChatCompressionDesc": "压缩未使用的聊天数据并保存到单独的文件中。这大大减少了聊天数据的大小，并大大提高了性能，但它是实验性的，可能不稳定，导致备份功能等出现问题。",
         "promptInfoInsideChatDesc": "启用后，这会将提示预设信息存储在聊天元数据中。存储的数据包括预设名称、活动切换和提示文本。这可能会略微增加处理时间和存储使用量。",
         "autoAdjustSchema": "启用后，将自动调整动态输出的 JSON 模式。",
