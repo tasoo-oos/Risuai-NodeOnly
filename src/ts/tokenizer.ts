@@ -1,6 +1,7 @@
 import type { Tiktoken } from "@dqbd/tiktoken";
 import type { Tokenizer } from "@mlc-ai/web-tokenizers";
-import { type character, type Chat, getCurrentCharacter, getDatabase } from "./storage/database.svelte";
+import { type character, type Chat, getCurrentCharacter, getCurrentChat, getDatabase } from "./storage/database.svelte";
+import { resolveChatModelBinding, resolvePresetTokenizer } from "./process/request/modelPresetBinding";
 import type { MultiModal, OpenAIChat } from "./process/index.svelte";
 import { supportsInlayImage } from "./process/files/inlays";
 import { risuChatParser } from "./parser/parser.svelte";
@@ -69,9 +70,36 @@ export async function encodeWithTokenizer(data: string, tokenizerType: string): 
     }
 }
 
+// Tokenizer for a ModelPreset's prompt (see resolvePresetTokenizer). Bypasses
+// the classic selection below entirely: db.aiModel, db.customTokenizer and the
+// plugin provider describe the classic model, not the preset's.
+export async function encodeWithPresetTokenizer(data: string, tokenizer: string): Promise<(number[] | Uint32Array | Int32Array)> {
+    const db = getDatabase();
+    const cacheKey = `preset::${tokenizer}::${data}`
+    if(db.useTokenizerCaching){
+        const cachedResult = encodeCache.get(cacheKey);
+        if (cachedResult !== undefined) {
+            return cachedResult;
+        }
+    }
+    const result = await encodeWithTokenizer(data, tokenizer);
+    if(db.useTokenizerCaching){
+        encodeCache.set(cacheKey, result);
+    }
+    return result;
+}
+
 // `modelId`: the classic model to tokenize for — the chat's main model when
 // it differs from the global db.aiModel (a legacy model bound to the slot).
+// Without one, a current chat whose main slot is a ModelPreset counts with that
+// preset's tokenizer instead of the global classic model's.
 export async function encode(data:string, modelId?:string):Promise<(number[]|Uint32Array|Int32Array)>{
+    if(!modelId){
+        const mainBinding = resolveChatModelBinding(getCurrentChat(), 'model');
+        if(mainBinding.kind === 'modelPreset'){
+            return encodeWithPresetTokenizer(data, resolvePresetTokenizer(mainBinding.preset));
+        }
+    }
     const db = getDatabase();
     const aiModel = modelId || db.aiModel;
     const modelInfo = getModelInfo(aiModel);
@@ -366,20 +394,33 @@ export class ChatTokenizer {
     private chatAdditionalTokens:number
     private useName:'name'|'noName'
     private modelId?:string
+    private presetTokenizer?:string
 
-    // `modelId`: the classic model the counted prompt is sent to; defaults to
-    // the global db.aiModel inside encode.
-    constructor(chatAdditionalTokens:number, useName:'name'|'noName', modelId?:string){
+    // `target`: the classic model id the counted prompt is sent to (defaults to
+    // the global db.aiModel inside encode), or `{ presetTokenizer }` when it
+    // goes to a ModelPreset — pinned up front so the count can't drift with
+    // whichever chat is current while the prompt is being built.
+    constructor(chatAdditionalTokens:number, useName:'name'|'noName', target?:string|{ presetTokenizer: string }){
         this.chatAdditionalTokens = chatAdditionalTokens
         this.useName = useName
-        this.modelId = modelId
+        if(typeof target === 'string'){
+            this.modelId = target
+        }
+        else if(target){
+            this.presetTokenizer = target.presetTokenizer
+        }
+    }
+    private encodeText(text:string){
+        return this.presetTokenizer
+            ? encodeWithPresetTokenizer(text, this.presetTokenizer)
+            : encode(text, this.modelId)
     }
     async tokenizeChat(data:OpenAIChat, args:{
         countThoughts?:boolean,
     } = {}) {
-        let encoded = (await encode(data.content, this.modelId)).length + this.chatAdditionalTokens
+        let encoded = (await this.encodeText(data.content)).length + this.chatAdditionalTokens
         if(data.name && this.useName ==='name'){
-            encoded += (await encode(data.name, this.modelId)).length + 1
+            encoded += (await this.encodeText(data.name)).length + 1
         }
         if(data.multimodals && data.multimodals.length > 0){
             for(const multimodal of data.multimodals){
@@ -388,7 +429,7 @@ export class ChatTokenizer {
         }
         if(data.thoughts && data.thoughts.length > 0 && args.countThoughts){
             for(const thought of data.thoughts){
-                encoded += (await encode(thought, this.modelId)).length + 1
+                encoded += (await this.encodeText(thought)).length + 1
             }
         }
         return encoded

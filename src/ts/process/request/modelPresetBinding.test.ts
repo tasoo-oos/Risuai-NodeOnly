@@ -16,6 +16,8 @@ import {
     resolveChatMaxResponseTokens,
     applyPromptPresetParams,
     presetSupportsVision,
+    resolveClassicFallbackModels,
+    resolvePresetTokenizer,
 } from './modelPresetBinding'
 import { emptyModelBinding, legacySlotValue, parseLegacySlot } from 'src/ts/preset/types'
 
@@ -235,6 +237,72 @@ describe('resolveChatMaxResponseTokens — the bug: stray legacy db.maxResponse 
         mockDb.modelPresets = [presetWith()]
         const chat = { useModelPreset: true, modelBinding: bindingWith('p-main') } as any
         expect(resolveChatMaxResponseTokens(chat)).toBe(500)
+    })
+
+    test('Anthropic preset with no output-token value reserves the max_tokens its adapter sends', () => {
+        // The anthropic-messages adapter puts max_tokens: 4096 on the wire when
+        // the body has none, so the budget must reserve that, not db.maxResponse.
+        mockDb.maxResponse = 65535
+        const preset = presetWith()
+        preset.profileSnapshot.adapterKind = 'anthropic-messages'
+        mockDb.modelPresets = [preset]
+        const chat = { useModelPreset: true, modelBinding: bindingWith('p-main') } as any
+        expect(resolveChatMaxResponseTokens(chat)).toBe(4096)
+    })
+})
+
+describe('resolveClassicFallbackModels — classic fallbacks never apply to a ModelPreset request', () => {
+    beforeEach(() => {
+        mockDb.fallbackModels = { model: ['gpt-4o'], memory: ['claude-3-haiku'], emotion: [], translate: [], otherAx: [] }
+    })
+
+    test('preset-bound main request gets no classic fallback', () => {
+        const chat = { useModelPreset: true, modelBinding: bindingWith('p-main') } as any
+        expect(resolveClassicFallbackModels(chat, 'model')).toEqual([])
+    })
+
+    test('preset-bound aux request (sub slot) gets no classic fallback', () => {
+        const binding = bindingWith('p-main')
+        binding.sub = 'p-main'
+        const chat = { useModelPreset: true, modelBinding: binding } as any
+        expect(resolveClassicFallbackModels(chat, 'memory')).toEqual([])
+    })
+
+    test('classic chat keeps its configured fallbacks (as a copy)', () => {
+        const chat = { useModelPreset: false } as any
+        const list = resolveClassicFallbackModels(chat, 'model')
+        expect(list).toEqual(['gpt-4o'])
+        list.push('')
+        expect(mockDb.fallbackModels.model).toEqual(['gpt-4o'])
+    })
+})
+
+describe('resolvePresetTokenizer — preset tokenizer, never the global classic one', () => {
+    function presetFor(kind: string, extra: { recommendedTokenizer?: string; tokenizerOverride?: string } = {}) {
+        return {
+            id: 'p', name: 'P',
+            profileSnapshot: { adapterKind: kind, schema: [], recommendedTokenizer: extra.recommendedTokenizer },
+            userValues: {},
+            tokenizerOverride: extra.tokenizerOverride,
+        } as any
+    }
+
+    test('override wins over the profile recommendation', () => {
+        expect(resolvePresetTokenizer(presetFor('openai-compatible', { recommendedTokenizer: 'tik', tokenizerOverride: 'llama3' }))).toBe('llama3')
+    })
+
+    test('profile recommendation is used without an override', () => {
+        expect(resolvePresetTokenizer(presetFor('openai-compatible', { recommendedTokenizer: 'deepseek' }))).toBe('deepseek')
+    })
+
+    test.each([
+        ['anthropic-messages', 'claude'],
+        ['google-gemini', 'gemma'],
+        ['openai-compatible', 'tik'],
+    ])('adapter-kind default for %s is %s', (kind, expected) => {
+        mockDb.aiModel = 'novelai'
+        mockDb.customTokenizer = 'mistral'
+        expect(resolvePresetTokenizer(presetFor(kind))).toBe(expected)
     })
 })
 

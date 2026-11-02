@@ -4,14 +4,17 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LLMTokenizer } from "./model/types";
 
-const { database, modelTokenizers, providerOptions, persisted } = vi.hoisted(() => ({
+const { database, modelTokenizers, providerOptions, persisted, current } = vi.hoisted(() => ({
     database: {
         aiModel: "",
         customTokenizer: "",
         currentPluginProvider: "",
         googleClaudeTokenizing: false,
         useTokenizerCaching: false,
+        nodeOnlyModelModeLock: "none",
+        modelPresets: [] as unknown[],
     },
+    current: { chat: null as unknown },
     modelTokenizers: new Map<string, number>(),
     providerOptions: new Map<string, { tokenizer: string }>(),
     persisted: new Map<string, unknown>(),
@@ -20,6 +23,7 @@ const { database, modelTokenizers, providerOptions, persisted } = vi.hoisted(() 
 vi.mock("./storage/database.svelte", () => ({
     getDatabase: () => database,
     getCurrentCharacter: () => null,
+    getCurrentChat: () => current.chat,
 }));
 vi.mock("./model/modellist", () => ({
     LLMTokenizer,
@@ -55,7 +59,7 @@ vi.stubGlobal("fetch", async (url: string) => {
     };
 });
 
-import { encode, encodeWithTokenizer, strongBan } from "./tokenizer";
+import { ChatTokenizer, encode, encodeWithTokenizer, strongBan } from "./tokenizer";
 
 const sample = "안녕하세요, 오늘은 날씨가 정말 좋네요. 你好，世界。こんにちは。Hello, world!";
 const ids = async (tokens: Promise<ArrayLike<number>>) => Array.from(await tokens);
@@ -65,6 +69,8 @@ beforeEach(() => {
     database.customTokenizer = "";
     database.currentPluginProvider = "";
     database.googleClaudeTokenizing = false;
+    database.modelPresets = [];
+    current.chat = null;
     modelTokenizers.clear();
     providerOptions.clear();
     persisted.clear();
@@ -97,6 +103,38 @@ describe("encode tokenizer selection", () => {
         const result = await ids(encode(sample));
         expect(result).toEqual(await ids(encodeWithTokenizer(sample, "gemma")));
         expect(result).not.toEqual(await ids(encodeWithTokenizer(sample, "llama3")));
+    });
+});
+
+describe("ModelPreset chats count with the preset's tokenizer", () => {
+    // The global classic config points at a different vocab on purpose.
+    beforeEach(() => {
+        database.aiModel = "openrouter";
+        database.customTokenizer = "mistral";
+        database.modelPresets = [{
+            id: "p-main",
+            name: "Main",
+            profileSnapshot: { adapterKind: "openai-compatible", recommendedTokenizer: "tik", schema: [] },
+            userValues: {},
+            tokenizerOverride: "llama3",
+        }];
+        current.chat = {
+            useModelPreset: true,
+            modelBinding: { main: "p-main", sub: "", separateAux: false, aux: {} },
+        };
+    });
+
+    it("encode() without a model id follows the current chat's preset", async () => {
+        const result = await ids(encode(sample));
+        expect(result).toEqual(await ids(encodeWithTokenizer(sample, "llama3")));
+        expect(result).not.toEqual(await ids(encodeWithTokenizer(sample, "mistral")));
+    });
+
+    it("ChatTokenizer pinned to a preset tokenizer ignores the global classic model", async () => {
+        current.chat = null; // pinned target must not depend on the current chat
+        const counter = new ChatTokenizer(0, "name", { presetTokenizer: "llama3" });
+        const count = await counter.tokenizeChat({ role: "user", content: sample });
+        expect(count).toBe((await encodeWithTokenizer(sample, "llama3")).length);
     });
 });
 

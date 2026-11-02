@@ -28,8 +28,9 @@ import { resolveWireModelId } from './wireInvariants'
 // did not change (only the base provider did), so the profile-update detection
 // will not flag them. Keep an adapter-side safety net for stale snapshots so
 // existing chats keep working. `=== undefined` preserves any explicit 0 or
-// negative override.
-const ANTHROPIC_FALLBACK_MAX_TOKENS = 4096
+// negative override. Exported so the context-budget reservation
+// (resolvePresetMaxOutputTokens) reserves the same value this sends.
+export const ANTHROPIC_FALLBACK_MAX_TOKENS = 4096
 
 // Hard API limit: a request may declare at most four prompt-cache breakpoints.
 const ANTHROPIC_MAX_CACHE_BREAKPOINTS = 4
