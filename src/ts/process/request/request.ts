@@ -49,7 +49,7 @@ import {
 } from "src/ts/status/requestStatus";
 import type { ProviderJobResult, ProviderJobStatus, ProviderRequestJob } from './providerJob';
 import { decorateJob, resolveRequestJob } from './providerJob';
-import { DEFAULT_ANTHROPIC_BATCH_TIMEOUT_MS, previewAnthropicBatchRequest, submitAnthropicBatchJob, type AnthropicBatchJob } from './anthropicBatchJob';
+import { DEFAULT_ANTHROPIC_BATCH_TIMEOUT_MS, previewAnthropicBatchRequest, submitAnthropicBatchJob, type AnthropicBatchJob, type AnthropicBatchRequestLog } from './anthropicBatchJob';
 import { ANTHROPIC_BATCH_STATUS_ABANDON_GRACE_MS, wrapAnthropicBatchStatusJob } from './anthropicBatchStatusJob';
 import { requestStatusText } from './requestStatusText';
 
@@ -758,6 +758,50 @@ function shouldUsePreparedAnthropicPresetBatch(
         && prepared.body[ANTHROPIC_SERVICE_TIER_PATH] === ANTHROPIC_BATCH_SERVICE_TIER
 }
 
+// Records each Anthropic batch as one request-log row (see
+// AnthropicBatchRequestLog): the create-batch request as the request and the
+// batch's results JSONL as the response. The batch path cannot use the
+// transport-wrapping log scope, which would record every status poll and
+// file the create-batch acknowledgement as the response. Headers are passed
+// through as-is; the server masks credentials on ingest like every other row.
+function makeAnthropicBatchRequestLogger(init: {
+    source: RequestLogSource
+    genId: string
+    model: string
+    provider: string
+    route: () => RequestLogRoute | undefined
+}): (entry: AnthropicBatchRequestLog) => void {
+    return (entry) => {
+        const usage = toLogUsage(entry.usage)
+        recordRequestLog({
+            timestamp: entry.startedAt,
+            category: 'llm',
+            source: init.source,
+            chatId: init.genId,
+            generationId: init.genId,
+            model: init.model,
+            provider: init.provider,
+            url: entry.url,
+            method: entry.method,
+            status: entry.status,
+            success: entry.success,
+            aborted: entry.aborted,
+            route: init.route(),
+            streaming: false,
+            durationMs: entry.durationMs,
+            requestHeaders: JSON.stringify(entry.requestHeaders),
+            requestBody: stripInlineMedia(entry.requestBody),
+            responseBody: entry.responseBody === undefined ? undefined : stripInlineMedia(entry.responseBody.trim()),
+            responseType: entry.responseType,
+            errorMessage: entry.errorMessage,
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            cachedTokens: usage?.cachedTokens,
+            reasoningTokens: usage?.reasoningTokens,
+        })
+    }
+}
+
 async function createAnthropicPresetBatchJob(
     preset: ModelPreset,
     options: AdapterChatOptions,
@@ -767,6 +811,7 @@ async function createAnthropicPresetBatchJob(
     prepared: Awaited<ReturnType<typeof prepareAnthropicChatRequest>>,
     chatId?: string,
     status?: { report: boolean, genId: string, kind: RequestKind },
+    onRequestLog?: (entry: AnthropicBatchRequestLog) => void,
 ): Promise<requestDataResponse> {
     if (status?.report) {
         safeStatus(() => {
@@ -805,7 +850,7 @@ async function createAnthropicPresetBatchJob(
         // accept the batch but the aborted response would lose the provider batch id,
         // leaving us unable to submit /cancel. Let creation return an id, then cancel.
         customId: uuidv4(),
-        chatId,
+        onRequestLog,
     })
     if (submission.ok === false) {
         if (status?.report) {
@@ -848,7 +893,7 @@ async function createAnthropicPresetBatchJob(
             initialMessages: options.messages,
             tools: options.tools,
             anthropicCache1h: options.anthropicCache1h,
-            chatId,
+            onRequestLog,
         })
         : submission.job
     const job = status?.report ? wrapAnthropicBatchStatusJob(toolLoopJob, status.genId) : toolLoopJob
@@ -868,7 +913,7 @@ function createAnthropicPresetBatchToolLoopJob(options: {
     initialMessages: AdapterChatMessage[]
     tools: AdapterToolDef[]
     anthropicCache1h?: boolean
-    chatId?: string
+    onRequestLog?: (entry: AnthropicBatchRequestLog) => void
 }): ProviderRequestJob {
     let currentJob: AnthropicBatchJob = options.firstJob
 
@@ -907,7 +952,7 @@ function createAnthropicPresetBatchToolLoopJob(options: {
                                 // cancels while creation is in flight; then send
                                 // Anthropic's explicit cancel request below.
                                 customId: uuidv4(),
-                                chatId: options.chatId,
+                                onRequestLog: options.onRequestLog,
                             })
                             if (submitted.ok === false) {
                                 lastFailure = { type: 'fail', result: submitted.error }
@@ -993,9 +1038,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // "log deleted" in its per-message viewer. chatId carries genId because
     // that is the key the per-message viewer looks up (alertRequestData sends
     // genInfo.generationId).
+    const logSource: RequestLogSource = arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode))
     const logScope = createRequestLogScope({
         category: 'llm',
-        source: arg.logSource ?? (arg.previewBody ? 'preview' : toLogSource(mode)),
+        source: logSource,
         chatId: genId,
         generationId: genId,
         model: wireModel,
@@ -1198,7 +1244,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
 
     try {
         if (canUseAnthropicBatch) {
-            const batchFetchImpl = makeProxiedFetch(arg.chatId)
+            // The last transport fetchNative actually used (direct or proxy),
+            // reported on the batch's log row like the scope does for others.
+            let batchRoute: RequestLogRoute | undefined
+            const batchFetchImpl = makeProxiedFetch(arg.chatId, (route) => { batchRoute = route })
             const batchOptions: AdapterChatOptions = {
                 messages, tools, abortSignal: abortSignal ?? undefined, fetchImpl: batchFetchImpl,
                 anthropicCache1h: getDatabase().claude1HourCaching === true,
@@ -1219,6 +1268,13 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
                     prepared,
                     arg.chatId,
                     { report: reportStatus, genId, kind: statusKind },
+                    makeAnthropicBatchRequestLogger({
+                        source: logSource,
+                        genId,
+                        model: wireModel,
+                        provider: preset.profileSnapshot.providerBaseId,
+                        route: () => batchRoute,
+                    }),
                 )
             }
         }

@@ -1,4 +1,4 @@
-import { parseAnthropicMessage, type AdapterChatResponse, type AdapterPreparedRequest } from 'src/ts/preset/adapter'
+import { parseAnthropicMessage, type AdapterChatResponse, type AdapterPreparedRequest, type AdapterUsage } from 'src/ts/preset/adapter'
 import type { ProviderJobResult, ProviderJobStatus, ProviderRequestJob } from './providerJob'
 import { formatReasoningParts } from 'src/ts/preset/adapter/reasoning'
 
@@ -10,8 +10,10 @@ interface AnthropicBatchJobOptions {
     timeoutMs?: number
     sleep?: (ms: number) => Promise<void>
     now?: () => number
-    logFetch?: (entry: AnthropicBatchFetchLogEntry) => void
-    chatId?: string
+    /** Receives exactly one entry per batch, once it reaches a final outcome. */
+    onRequestLog?: (entry: AnthropicBatchRequestLog) => void
+    /** When the create-batch request was sent; defaults to job construction. */
+    submittedAt?: number
 }
 
 export interface AnthropicBatchSubmitOptions extends AnthropicBatchJobOptions {
@@ -30,15 +32,26 @@ export type AnthropicBatchMessageResult =
     | { type: 'fail'; result: string }
     | { type: 'canceled'; result?: string }
 
-export interface AnthropicBatchFetchLogEntry {
-    body: string
-    headers?: Record<string, string>
-    response: string
-    success: boolean
+// One request-log entry per batch, not per HTTP call: a batch is a create
+// POST, a status poll every few seconds for up to 24h, and a results GET.
+// Logging each call would bury the generation under poll rows, and the
+// per-message viewer shows only the latest row for a generation, which would
+// be a poll rather than the answer. The entry pairs what was submitted (the
+// create-batch request) with what the batch produced (the results JSONL).
+export interface AnthropicBatchRequestLog {
+    startedAt: number
+    durationMs: number
     url: string
-    resType?: string
-    chatId?: string
+    method: 'POST'
+    requestHeaders: Record<string, string>
+    requestBody: string
     status?: number
+    success: boolean
+    aborted: boolean
+    responseBody?: string
+    responseType?: string
+    errorMessage?: string
+    usage?: AdapterUsage
 }
 
 export interface AnthropicBatchPreviewRequest {
@@ -71,76 +84,16 @@ export async function safeResponseText(response: Response): Promise<string> {
     }
 }
 
-function requestUrl(input: RequestInfo | URL): string {
-    return typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-}
-
-function requestBodyText(body: BodyInit | null | undefined): string {
-    if (body === undefined || body === null) return ''
-    if (typeof body === 'string') return body
-    if (body instanceof URLSearchParams) return body.toString()
-    if (body instanceof Uint8Array) return new TextDecoder().decode(body)
-    if (body instanceof ArrayBuffer) return new TextDecoder().decode(body)
-    return '[unlogged request body]'
-}
-
-function requestHeaders(headers: HeadersInit | undefined): Record<string, string> {
-    if (!headers) return {}
-    return Object.fromEntries(new Headers(headers).entries())
-}
-
-async function logAnthropicBatchFetch(
-    logFetch: ((entry: AnthropicBatchFetchLogEntry) => void) | undefined,
-    input: RequestInfo | URL,
-    init: RequestInit | undefined,
-    response: Response,
-    chatId: string | undefined,
-): Promise<void> {
-    if (!logFetch) return
+function emitRequestLog(
+    onRequestLog: ((entry: AnthropicBatchRequestLog) => void) | undefined,
+    entry: AnthropicBatchRequestLog,
+): void {
+    if (!onRequestLog) return
     try {
-        logFetch({
-            body: requestBodyText(init?.body),
-            headers: requestHeaders(init?.headers),
-            response: await response.clone().text(),
-            success: response.ok,
-            url: requestUrl(input),
-            resType: 'text',
-            chatId,
-            status: response.status,
-        })
+        onRequestLog(entry)
     } catch (e) {
+        // Logging must never affect the request.
         console.error('[ModelPreset] Anthropic batch logging failed', e)
-    }
-}
-
-async function fetchAnthropicBatch(
-    fetchImpl: typeof fetch,
-    input: RequestInfo | URL,
-    init: RequestInit | undefined,
-    logFetch: ((entry: AnthropicBatchFetchLogEntry) => void) | undefined,
-    chatId?: string,
-): Promise<Response> {
-    try {
-        const response = await fetchImpl(input, init)
-        await logAnthropicBatchFetch(logFetch, input, init, response, chatId)
-        return response
-    } catch (e) {
-        if (logFetch) {
-            try {
-                logFetch({
-                    body: requestBodyText(init?.body),
-                    headers: requestHeaders(init?.headers),
-                    response: e instanceof Error ? e.message : String(e),
-                    success: false,
-                    url: requestUrl(input),
-                    resType: 'text',
-                    chatId,
-                })
-            } catch (logError) {
-                console.error('[ModelPreset] Anthropic batch logging failed', logError)
-            }
-        }
-        throw e
     }
 }
 
@@ -154,6 +107,12 @@ export function toAnthropicBatchParams(body: AdapterPreparedRequest['body']): Ad
     delete params.service_tier
     delete params.stream
     return params
+}
+
+export function anthropicBatchSubmitBody(prepared: AdapterPreparedRequest, customId: string): string {
+    return JSON.stringify({
+        requests: [{ custom_id: customId, params: toAnthropicBatchParams(prepared.body) }],
+    })
 }
 
 export function previewAnthropicBatchRequest(
@@ -187,8 +146,13 @@ export class AnthropicBatchJob implements ProviderRequestJob {
     private readonly timeoutMs: number
     private readonly sleep: (ms: number) => Promise<void>
     private readonly now: () => number
-    private readonly logFetch?: (entry: AnthropicBatchFetchLogEntry) => void
-    private readonly chatId?: string
+    private readonly onRequestLog?: (entry: AnthropicBatchRequestLog) => void
+    private readonly submittedAt: number
+    private requestLogged = false
+    // HTTP details of the response that decided the outcome (results, or a
+    // failed status poll), for the request log.
+    private finalResponse?: { status: number; body: string; type?: string }
+    private finalUsage?: AdapterUsage
 
     constructor(
         readonly id: string,
@@ -201,9 +165,9 @@ export class AnthropicBatchJob implements ProviderRequestJob {
         this.timeoutMs = options.timeoutMs ?? DEFAULT_ANTHROPIC_BATCH_TIMEOUT_MS
         this.sleep = options.sleep ?? defaultSleep
         this.now = options.now ?? Date.now
-        this.logFetch = options.logFetch
-        this.chatId = options.chatId
+        this.onRequestLog = options.onRequestLog
         this.createdAt = this.now()
+        this.submittedAt = options.submittedAt ?? this.createdAt
     }
 
     getStatus(): ProviderJobStatus {
@@ -220,11 +184,11 @@ export class AnthropicBatchJob implements ProviderRequestJob {
         this.cancelRequested = true
         this.setStatus({ state: 'cancel-requested', message: 'Cancel requested; waiting for final batch state' })
         try {
-            await fetchAnthropicBatch(this.fetchImpl, this.cancelUrl(), {
+            await this.fetchImpl(this.cancelUrl(), {
                 method: 'POST',
                 headers: this.prepared.headers,
                 body: '{}',
-            }, undefined, this.chatId)
+            })
         } catch (e) {
             console.error('[ModelPreset] Anthropic batch cancel failed', e)
         }
@@ -237,6 +201,39 @@ export class AnthropicBatchJob implements ProviderRequestJob {
     }
 
     async waitForResponse(options: { signal?: AbortSignal | null; onStatus?: (status: ProviderJobStatus) => void } = {}): Promise<AnthropicBatchMessageResult> {
+        let result: AnthropicBatchMessageResult
+        try {
+            result = await this.pollForResponse(options)
+        } catch (e) {
+            this.recordRequestLog({ type: 'fail', result: e instanceof Error ? e.message : String(e) }, options.signal)
+            throw e
+        }
+        this.recordRequestLog(result, options.signal)
+        return result
+    }
+
+    private recordRequestLog(result: AnthropicBatchMessageResult, signal?: AbortSignal | null): void {
+        if (this.requestLogged) return
+        this.requestLogged = true
+        const success = result.type === 'success'
+        emitRequestLog(this.onRequestLog, {
+            startedAt: this.submittedAt,
+            durationMs: Math.max(0, this.now() - this.submittedAt),
+            url: this.batchBaseUrl(),
+            method: 'POST',
+            requestHeaders: this.prepared.headers,
+            requestBody: anthropicBatchSubmitBody(this.prepared, this.id),
+            status: this.finalResponse?.status,
+            success,
+            aborted: result.type === 'canceled' || (!success && (this.cancelRequested || signal?.aborted === true)),
+            responseBody: this.finalResponse?.body,
+            responseType: this.finalResponse?.type,
+            errorMessage: success ? undefined : result.result,
+            usage: success ? this.finalUsage : undefined,
+        })
+    }
+
+    private async pollForResponse(options: { signal?: AbortSignal | null; onStatus?: (status: ProviderJobStatus) => void }): Promise<AnthropicBatchMessageResult> {
         const startedAt = this.now()
         const abortHandler = () => {
             this.setStatus({ state: 'cancel-requested', message: 'Cancel requested; waiting for final batch state' }, options.onStatus)
@@ -256,11 +253,11 @@ export class AnthropicBatchJob implements ProviderRequestJob {
 
                 let statusRes: Response
                 try {
-                    statusRes = await fetchAnthropicBatch(this.fetchImpl, this.statusUrl(), {
+                    statusRes = await this.fetchImpl(this.statusUrl(), {
                         method: 'GET',
                         headers: this.prepared.headers,
                         signal: this.cancelRequested ? undefined : options.signal ?? undefined,
-                    }, undefined, this.chatId)
+                    })
                 } catch (e) {
                     if (options.signal?.aborted || this.cancelRequested) {
                         await this.sleep(this.pollMs)
@@ -271,6 +268,11 @@ export class AnthropicBatchJob implements ProviderRequestJob {
 
                 if (!statusRes.ok) {
                     const message = await safeResponseText(statusRes)
+                    this.finalResponse = {
+                        status: statusRes.status,
+                        body: message,
+                        type: statusRes.headers.get('content-type') ?? undefined,
+                    }
                     this.setStatus({ state: 'failed', message }, options.onStatus)
                     return { type: 'fail', result: message }
                 }
@@ -304,17 +306,22 @@ export class AnthropicBatchJob implements ProviderRequestJob {
     }
 
     private async readResponseResult(onStatus?: (status: ProviderJobStatus) => void): Promise<AnthropicBatchMessageResult> {
-        const batchRes = await fetchAnthropicBatch(this.fetchImpl, this.resultsUrl(), {
+        const batchRes = await this.fetchImpl(this.resultsUrl(), {
             method: 'GET',
             headers: this.prepared.headers,
-        }, this.logFetch, this.chatId)
+        })
+        const body = await safeResponseText(batchRes)
+        this.finalResponse = {
+            status: batchRes.status,
+            body,
+            type: batchRes.headers.get('content-type') ?? undefined,
+        }
         if (!batchRes.ok) {
-            const message = await safeResponseText(batchRes)
-            this.setStatus({ state: 'failed', message }, onStatus)
-            return { type: 'fail', result: message }
+            this.setStatus({ state: 'failed', message: body }, onStatus)
+            return { type: 'fail', result: body }
         }
 
-        const lines = (await batchRes.text()).split('\n').filter((line) => line.trim().length > 0)
+        const lines = body.split('\n').filter((line) => line.trim().length > 0)
         for (const line of lines) {
             let batchData: unknown
             try {
@@ -328,6 +335,7 @@ export class AnthropicBatchJob implements ProviderRequestJob {
             switch (resultType) {
                 case 'succeeded': {
                     const response = parseAnthropicMessage(result.message)
+                    this.finalUsage = response.usage
                     this.setStatus({ state: 'succeeded', message: 'Anthropic batch completed' }, onStatus)
                     return { type: 'success', response }
                 }
@@ -372,33 +380,64 @@ export class AnthropicBatchJob implements ProviderRequestJob {
 
 export async function submitAnthropicBatchJob(options: AnthropicBatchSubmitOptions): Promise<AnthropicBatchSubmitResult> {
     const batchUrl = anthropicBatchBaseUrl(options.prepared.url)
+    const requestBody = anthropicBatchSubmitBody(options.prepared, options.customId)
+    const now = options.now ?? Date.now
+    const submittedAt = now()
+    // A batch that never got created still gets its log entry, with the
+    // create-batch response (or transport error) as the outcome.
+    const logSubmitFailure = (failure: { error: string; status?: number; body?: string; type?: string; aborted?: boolean }) => {
+        emitRequestLog(options.onRequestLog, {
+            startedAt: submittedAt,
+            durationMs: Math.max(0, now() - submittedAt),
+            url: batchUrl,
+            method: 'POST',
+            requestHeaders: options.prepared.headers,
+            requestBody,
+            status: failure.status,
+            success: false,
+            aborted: failure.aborted === true,
+            responseBody: failure.body,
+            responseType: failure.type,
+            errorMessage: failure.error,
+        })
+    }
     let response: Response
     try {
-        response = await fetchAnthropicBatch(options.fetchImpl, batchUrl, {
+        response = await options.fetchImpl(batchUrl, {
             method: 'POST',
             headers: options.prepared.headers,
-            body: JSON.stringify({
-                requests: [{ custom_id: options.customId, params: toAnthropicBatchParams(options.prepared.body) }],
-            }),
+            body: requestBody,
             signal: options.signal,
-        }, options.logFetch, options.chatId)
+        })
     } catch (e) {
-        return { ok: false, error: e instanceof Error ? e.message : String(e) }
+        const error = e instanceof Error ? e.message : String(e)
+        logSubmitFailure({ error, aborted: (e as Error)?.name === 'AbortError' })
+        return { ok: false, error }
     }
+    const responseText = await safeResponseText(response)
+    const responseType = response.headers.get('content-type') ?? undefined
     if (!response.ok) {
-        return { ok: false, error: await safeResponseText(response) }
+        logSubmitFailure({ error: responseText, status: response.status, body: responseText, type: responseType })
+        return { ok: false, error: responseText }
     }
-    const payload = await safeJson(response)
+    let payload: unknown
+    try {
+        payload = JSON.parse(responseText)
+    } catch {
+        payload = undefined
+    }
     if (!isRecord(payload) || typeof payload.id !== 'string' || payload.id.length === 0) {
-        return { ok: false, error: 'No batch id returned from Anthropic batch request' }
+        const error = 'No batch id returned from Anthropic batch request'
+        logSubmitFailure({ error, status: response.status, body: responseText, type: responseType })
+        return { ok: false, error }
     }
     const jobOptions: AnthropicBatchJobOptions = {
         pollMs: options.pollMs,
         timeoutMs: options.timeoutMs,
         sleep: options.sleep,
         now: options.now,
-        logFetch: options.logFetch,
-        chatId: options.chatId,
+        onRequestLog: options.onRequestLog,
+        submittedAt,
     }
     return {
         ok: true,

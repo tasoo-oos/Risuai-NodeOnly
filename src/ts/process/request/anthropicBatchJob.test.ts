@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { prepareAnthropicChatRequest, type AdapterPreparedRequest } from 'src/ts/preset/adapter'
 import type { ModelPreset } from 'src/ts/preset/types'
-import { AnthropicBatchJob, anthropicBatchBaseUrl, previewAnthropicBatchRequest, submitAnthropicBatchJob, type AnthropicBatchFetchLogEntry } from './anthropicBatchJob'
+import { AnthropicBatchJob, anthropicBatchBaseUrl, previewAnthropicBatchRequest, submitAnthropicBatchJob, type AnthropicBatchRequestLog } from './anthropicBatchJob'
 
 interface CapturedCall {
     url: string
@@ -337,13 +337,28 @@ describe('Anthropic preset batch jobs', () => {
         expect(statusCall?.signal).toBeNull()
     })
 
-    test('logs submit and results bodies without consuming responses', async () => {
-        const logs: AnthropicBatchFetchLogEntry[] = []
+    test('logs one entry per batch with the results JSONL as the response body', async () => {
+        const logs: AnthropicBatchRequestLog[] = []
+        const resultsBody = JSON.stringify({
+            custom_id: 'custom-1',
+            result: {
+                type: 'succeeded',
+                message: {
+                    content: [{ type: 'text', text: 'Logged final text' }],
+                    stop_reason: 'end_turn',
+                    usage: { input_tokens: 11, output_tokens: 7 },
+                },
+            },
+        }) + '\n'
+        let clock = 1_000
         const { fetchImpl, calls } = captureFetch((call) => {
+            clock += 500
             if (call.url.endsWith('/cancel')) return jsonResponse({ id: 'batch_123', processing_status: 'canceling' })
-            if (call.url.endsWith('/results')) return textResponse(successJsonl('Logged final text'))
+            if (call.url.endsWith('/results')) {
+                return new Response(resultsBody, { status: 200, headers: { 'Content-Type': 'application/binary' } })
+            }
             if (call.url.endsWith('/batch_123')) return jsonResponse({ processing_status: 'ended' })
-            return jsonResponse({ id: 'batch_123' })
+            return jsonResponse({ id: 'batch_123', processing_status: 'in_progress' })
         })
 
         const submitted = await submitAnthropicBatchJob({
@@ -351,34 +366,51 @@ describe('Anthropic preset batch jobs', () => {
             fetchImpl,
             customId: 'custom-1',
             sleep: async () => {},
-            logFetch: (entry) => logs.push(entry),
+            now: () => clock,
+            onRequestLog: (entry) => logs.push(entry),
         })
 
         expect(submitted.ok).toBe(true)
         if (submitted.ok === false) return
+        // Submitting alone does not log: the row waits for the batch result.
+        expect(logs).toHaveLength(0)
 
         await submitted.job.cancel()
         const result = await submitted.job.wait()
+        // A repeated wait must not produce a second row.
+        await submitted.job.wait()
 
         expect(result).toEqual({ type: 'success', result: 'Logged final text' })
-        expect(logs.map((log) => log.url)).toEqual([
-            'https://api.anthropic.com/v1/messages/batches',
-            'https://api.anthropic.com/v1/messages/batches/batch_123/results',
-        ])
         expect(calls.some((call) => call.url.endsWith('/cancel'))).toBe(true)
         expect(calls.some((call) => call.url.endsWith('/batch_123') && call.method === 'GET')).toBe(true)
-        expect(logs[0].body).toContain('custom-1')
-        expect(logs[0].response).toContain('batch_123')
-        expect(logs[1].body).toBe('')
-        expect(logs[1].response).toContain('Logged final text')
-        expect(logs.every((log) => log.success === true && log.status === 200)).toBe(true)
+        expect(logs).toHaveLength(1)
+        const [log] = logs
+        expect(log.url).toBe('https://api.anthropic.com/v1/messages/batches')
+        expect(log.method).toBe('POST')
+        expect(log.requestHeaders).toEqual(prepared().headers)
+        expect(JSON.parse(log.requestBody)).toEqual({
+            requests: [{ custom_id: 'custom-1', params: prepared().body }],
+        })
+        expect(log.responseBody).toBe(resultsBody)
+        expect(log.responseType).toBe('application/binary')
+        expect(log.status).toBe(200)
+        expect(log.success).toBe(true)
+        expect(log.aborted).toBe(false)
+        expect(log.errorMessage).toBeUndefined()
+        expect(log.usage).toMatchObject({ promptTokens: 11, completionTokens: 7 })
+        expect(log.startedAt).toBe(1_000)
+        expect(log.durationMs).toBeGreaterThan(0)
     })
 
-    test('logs submit and final expired results without status polling noise', async () => {
-        const logs: AnthropicBatchFetchLogEntry[] = []
-        const { fetchImpl, calls } = captureFetch((call) => {
+    test('logs final expired results without status polling noise', async () => {
+        const logs: AnthropicBatchRequestLog[] = []
+        let statusPolls = 0
+        const { fetchImpl } = captureFetch((call) => {
             if (call.url.endsWith('/results')) return textResponse(expiredJsonl())
-            if (call.url.endsWith('/batch_123')) return jsonResponse({ processing_status: 'ended' })
+            if (call.url.endsWith('/batch_123')) {
+                statusPolls++
+                return jsonResponse({ processing_status: statusPolls < 3 ? 'in_progress' : 'ended' })
+            }
             return jsonResponse({ id: 'batch_123' })
         })
 
@@ -387,7 +419,7 @@ describe('Anthropic preset batch jobs', () => {
             fetchImpl,
             customId: 'custom-1',
             sleep: async () => {},
-            logFetch: (entry) => logs.push(entry),
+            onRequestLog: (entry) => logs.push(entry),
         })
 
         expect(submitted.ok).toBe(true)
@@ -396,12 +428,98 @@ describe('Anthropic preset batch jobs', () => {
         const result = await submitted.job.wait()
 
         expect(result).toEqual({ type: 'fail', result: 'Anthropic batch request expired' })
-        expect(logs.map((log) => log.url)).toEqual([
-            'https://api.anthropic.com/v1/messages/batches',
-            'https://api.anthropic.com/v1/messages/batches/batch_123/results',
-        ])
-        expect(calls.some((call) => call.url.endsWith('/batch_123') && call.method === 'GET')).toBe(true)
-        expect(logs[1].response).toContain('expired')
+        expect(statusPolls).toBe(3)
+        expect(logs).toHaveLength(1)
+        expect(logs[0].responseBody).toBe(expiredJsonl())
+        expect(logs[0].success).toBe(false)
+        expect(logs[0].aborted).toBe(false)
+        expect(logs[0].errorMessage).toBe('Anthropic batch request expired')
+        expect(logs[0].usage).toBeUndefined()
+    })
+
+    test('logs canceled batch results as aborted', async () => {
+        const logs: AnthropicBatchRequestLog[] = []
+        const { fetchImpl } = captureFetch((call) => {
+            if (call.url.endsWith('/results')) return textResponse(canceledJsonl())
+            return jsonResponse({ processing_status: 'ended' })
+        })
+        const job = new AnthropicBatchJob('custom-1', prepared(), 'batch_123', fetchImpl, {
+            sleep: async () => {},
+            onRequestLog: (entry) => logs.push(entry),
+        })
+
+        await job.wait()
+
+        expect(logs).toHaveLength(1)
+        expect(logs[0].responseBody).toBe(canceledJsonl())
+        expect(logs[0].success).toBe(false)
+        expect(logs[0].aborted).toBe(true)
+    })
+
+    test('logs a failed status poll response when the batch cannot finish', async () => {
+        const logs: AnthropicBatchRequestLog[] = []
+        const { fetchImpl } = captureFetch(() => textResponse('{"error":"not found"}', 404))
+        const job = new AnthropicBatchJob('custom-1', prepared(), 'batch_123', fetchImpl, {
+            sleep: async () => {},
+            onRequestLog: (entry) => logs.push(entry),
+        })
+
+        const result = await job.wait()
+
+        expect(result).toEqual({ type: 'fail', result: '{"error":"not found"}' })
+        expect(logs).toHaveLength(1)
+        expect(logs[0].status).toBe(404)
+        expect(logs[0].responseBody).toBe('{"error":"not found"}')
+        expect(logs[0].success).toBe(false)
+    })
+
+    test('logs submit failures with the create-batch response', async () => {
+        const logs: AnthropicBatchRequestLog[] = []
+        const onRequestLog = (entry: AnthropicBatchRequestLog) => logs.push(entry)
+
+        await submitAnthropicBatchJob({
+            prepared: prepared(),
+            fetchImpl: async () => textResponse('bad key', 401),
+            customId: 'custom-1',
+            onRequestLog,
+        })
+        await submitAnthropicBatchJob({
+            prepared: prepared(),
+            fetchImpl: async () => { throw new Error('network down') },
+            customId: 'custom-2',
+            onRequestLog,
+        })
+
+        expect(logs).toHaveLength(2)
+        expect(logs[0]).toMatchObject({
+            url: 'https://api.anthropic.com/v1/messages/batches',
+            status: 401,
+            success: false,
+            responseBody: 'bad key',
+            errorMessage: 'bad key',
+        })
+        expect(logs[0].requestBody).toContain('custom-1')
+        expect(logs[1]).toMatchObject({ success: false, errorMessage: 'network down' })
+        expect(logs[1].status).toBeUndefined()
+        expect(logs[1].responseBody).toBeUndefined()
+    })
+
+    test('logging failures never affect the batch', async () => {
+        const { fetchImpl } = captureFetch((call) => {
+            if (call.url.endsWith('/results')) return textResponse(successJsonl('Still fine'))
+            if (call.url.endsWith('/batch_123')) return jsonResponse({ processing_status: 'ended' })
+            return jsonResponse({ id: 'batch_123' })
+        })
+        const submitted = await submitAnthropicBatchJob({
+            prepared: prepared(),
+            fetchImpl,
+            customId: 'custom-1',
+            sleep: async () => {},
+            onRequestLog: () => { throw new Error('log sink down') },
+        })
+        expect(submitted.ok).toBe(true)
+        if (submitted.ok === false) return
+        expect(await submitted.job.wait()).toEqual({ type: 'success', result: 'Still fine' })
     })
 
     test('formats errored JSONL result without undefined type prefix', async () => {
