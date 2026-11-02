@@ -38,6 +38,8 @@ vi.mock('./modelPresetBinding', () => ({
     classicModelIdFor: vi.fn(),
     buildModelPresetCredential: () => undefined,
     presetSupportsVision: () => false,
+    presetAnthropicCacheTtl: () => '5m',
+    resolveClassicFallbackModels: () => [],
 }))
 vi.mock('src/ts/preset/adapter/wireInvariants', () => ({ resolveWireModelId: () => 'wire-model' }))
 vi.mock('src/ts/requestLog', () => ({

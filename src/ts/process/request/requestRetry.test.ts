@@ -45,6 +45,7 @@ vi.mock('./modelPresetBinding', () => ({
     buildModelPresetCredential: vi.fn(),
     applyPromptPresetParams: vi.fn(),
     presetSupportsVision: vi.fn(),
+    resolveClassicFallbackModels: () => [],
 }))
 
 import { requestChatData } from './request'
