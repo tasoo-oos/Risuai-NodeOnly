@@ -20,8 +20,10 @@ src/ts/process/request/anthropicBatchStatusJob.test.ts
 src/ts/process/request/providerJob.ts
 src/ts/process/request/requestStatusText.ts
 src/ts/process/request/safeStatus.ts
-src/ts/fetchLogPolicy.ts
-src/ts/fetchLogPolicy.test.ts
+src/ts/preset/registry/anthropicBatchTier.ts
+src/ts/preset/registry/anthropicBatchTier.test.ts
+src/ts/preset/registry/snapshot.ts
+src/ts/plugins/apiV3/v3.svelte.ts
 
 # YAML prompt / chat interchange
 src/ts/yaml.ts
@@ -44,7 +46,6 @@ src/ts/preset/adapter/anthropicMessages.ts
 src/ts/preset/adapter/index.ts
 src/ts/preset/adapter/toolLoop.ts
 src/ts/preset/adapter/toolLoop.test.ts
-src/ts/preset/registry/bundled/profiles/anthropic/*.json
 
 # Mobile viewport height re-sync after the keyboard is dismissed with focus kept
 src/ts/viewportHeight.ts
