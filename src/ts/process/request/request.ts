@@ -40,7 +40,7 @@ import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError } from "./jobFetch";
 import { withBodyInterceptors } from "./bodyInterceptors";
 import { toLogSource, toRequestKind } from "./logSource";
-import { resolveChatModelBinding, classicModelIdFor, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision } from "./modelPresetBinding";
+import { resolveChatModelBinding, classicModelIdFor, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision, presetAnthropicCacheTtl } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, recordRequestLog, stripInlineMedia, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
@@ -1094,6 +1094,13 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // off, so OFF is byte-identical to the prior text-only behavior.
     const supportsVision = presetSupportsVision(preset)
 
+    // Anthropic prompt-cache mode (off / 5m / 1h) comes from the preset alone —
+    // never the global classic db.claude1HourCaching. Breakpoints still ride on
+    // message.cachePoint; this picks whether they are sent and their TTL. Shared
+    // by the preview, the send/stream options and every tool-loop turn so all
+    // three build the same body.
+    const anthropicCacheTtl = presetAnthropicCacheTtl(preset)
+
     // Gemini context caching: MAIN chat requests on the google-gemini adapter
     // (AI Studio key auth OR Vertex native service-account auth) — tool runs and
     // previews are excluded. Both auth kinds share the cachedContents wire; the
@@ -1189,7 +1196,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // would actually be sent (cache breakpoints included).
             const prepared = await previewModelPreset(kind, preset, {
                 messages, tools, fetchImpl,
-                anthropicCache1h: getDatabase().claude1HourCaching === true,
+                anthropicCacheTtl,
             }, credential)
             if (shouldUsePreparedAnthropicPresetBatch(preset, prepared)) {
                 return {
@@ -1268,9 +1275,7 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // Opt-in (System > Request Logs): without it a streamed response
             // reports no tokens at all, so chat usage statistics stay empty.
             collectStreamUsage: getDatabase().requestLogStreamUsage === true,
-            // Prompt-cache breakpoints ride on message.cachePoint; this only picks
-            // the TTL, matching the classic Anthropic path.
-            anthropicCache1h: getDatabase().claude1HourCaching === true,
+            anthropicCacheTtl,
         }
         if (reportStatus) {
             safeStatus(() => startStatus(genId, { kind: statusKind, label: preset.name, chatId: arg.realChatId, phase: 'connecting', now: Date.now() }))
@@ -1447,8 +1452,8 @@ async function runModelPresetToolLoop(
             {
                 messages: convo, tools, abortSignal: abortSignal ?? undefined, fetchImpl,
                 // Tool turns are ordinary billed requests: without this the cache
-                // TTL silently drops back to 5 minutes for the whole tool loop.
-                anthropicCache1h: getDatabase().claude1HourCaching === true,
+                // mode silently drops back to the 5-minute default for the loop.
+                anthropicCacheTtl: presetAnthropicCacheTtl(preset),
             },
             credential,
         ),

@@ -16,6 +16,7 @@ import {
     resolveChatMaxResponseTokens,
     applyPromptPresetParams,
     presetSupportsVision,
+    presetAnthropicCacheTtl,
 } from './modelPresetBinding'
 import { emptyModelBinding, legacySlotValue, parseLegacySlot } from 'src/ts/preset/types'
 
@@ -468,5 +469,24 @@ describe('legacy model slots (@legacy / @legacy:<model>)', () => {
         mockDb.maxResponse = 777
         const chat = chatWith({ main: legacySlotValue('pinned-main') })
         expect(resolveChatMaxResponseTokens(chat)).toBe(777)
+    })
+})
+
+describe('presetAnthropicCacheTtl', () => {
+    test('unset means 5m, whatever the global classic switch says', () => {
+        mockDb = { claude1HourCaching: true }
+        expect(presetAnthropicCacheTtl({ id: 'p' } as any)).toBe('5m')
+    })
+
+    test('returns the preset value for off / 5m / 1h', () => {
+        mockDb = { claude1HourCaching: false }
+        for (const ttl of ['off', '5m', '1h'] as const) {
+            expect(presetAnthropicCacheTtl({ id: 'p', anthropicCacheTtl: ttl } as any)).toBe(ttl)
+        }
+    })
+
+    test('an unrecognised imported value falls back to 5m', () => {
+        expect(presetAnthropicCacheTtl({ id: 'p', anthropicCacheTtl: '24h' } as any)).toBe('5m')
+        expect(presetAnthropicCacheTtl({ id: 'p', anthropicCacheTtl: true } as any)).toBe('5m')
     })
 })
