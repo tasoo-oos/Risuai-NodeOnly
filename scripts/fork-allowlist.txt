@@ -78,3 +78,21 @@ src/ts/tokenizer.ts
 # Per-preset Anthropic prompt-cache mode
 src/ts/preset/adapter/anthropicMessages.test.ts
 src/ts/preset/adapter/types.ts
+
+# Request hooks across preset, server-job and retry paths
+plugins.md
+server/node/model-jobs.cjs
+server/node/model-jobs.test.ts
+src/ts/globalApi.svelte.ts
+src/ts/parser/escape.ts
+src/ts/parser/parser.svelte.ts
+src/ts/plugins/apiV3/risuai.d.ts
+src/ts/process/request/bodyInterceptors.test.ts
+src/ts/process/request/bodyInterceptors.ts
+src/ts/process/request/jobFetch.test.ts
+src/ts/process/request/jobFetch.ts
+src/ts/process/request/jobRecovery.test.ts
+src/ts/process/request/jobRecovery.ts
+src/ts/process/request/jobRecoveryProxy.test.ts
+src/ts/process/request/requestPresetJob.test.ts
+src/ts/process/request/requestRetry.test.ts
