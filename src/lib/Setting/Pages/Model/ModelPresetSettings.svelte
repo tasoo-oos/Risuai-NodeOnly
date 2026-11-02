@@ -26,7 +26,7 @@
     import { testModelPreset, type ModelPresetTestResult } from "src/ts/process/request/request";
     import { getOfficialRegistry, getPresetUpdateStatus, syncRemoteRegistry } from "src/ts/preset/registry";
     import { buildSeenMap, computeRegistryNotice, noticeCount } from "src/ts/preset/registry/notice";
-    import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, type AnthropicCacheTtl } from "src/ts/preset/types";
+    import { TOOL_CAPABLE_ADAPTER_KINDS, VISION_CAPABLE_ADAPTER_KINDS, presetConsumesCachePoint, type AnthropicCacheTtl } from "src/ts/preset/types";
     import { onMount } from "svelte";
     import { v4 as uuidv4 } from "uuid";
 
@@ -107,6 +107,12 @@
         && (editingPreset.profileSnapshot.capabilities ?? []).includes('cache')
         && editingPreset.profileSnapshot.adapterKind === 'google-gemini'
     );
+    // Per-preset automatic cache point. Same gate sendChat applies
+    // (presetConsumesCachePoint): on anthropic-messages inside its "Prompt
+    // caching" section unless the cache mode is off, and on google-gemini inside
+    // the context-caching section while caching is enabled. openai-compatible
+    // ignores cachePoint.
+    const showAutoCachePointToggle = $derived(!!editingPreset && presetConsumesCachePoint(editingPreset));
 
     // Anthropic prompt-cache mode. Any anthropic-messages preset can use it (the
     // breakpoints are plain cache_control markers, no capability flag needed).
@@ -329,6 +335,17 @@
                         {/if}
                     </div>
                 {/if}
+                {#snippet autoCachePointToggle(indent: boolean)}
+                    <div class="flex items-center justify-between gap-3" class:pl-4={indent}>
+                        <div class="flex flex-col gap-0.5 min-w-0">
+                            <span class="text-sm text-textcolor">{language.modelPresetAutoCachePoint}</span>
+                            <span class="text-xs text-textcolor2">{language.modelPresetAutoCachePointHelp}</span>
+                        </div>
+                        <div class="shrink-0">
+                            <ShSwitch checked={!!editingPreset.automaticCachePoint} onCheckedChange={(v) => { editingPreset.automaticCachePoint = v }} />
+                        </div>
+                    </div>
+                {/snippet}
                 {#if showCacheSection}
                     <div class="flex flex-col gap-4 mb-6">
                         <h3 class="text-sm font-semibold text-textcolor2 uppercase tracking-wide">{language.modelPresetCacheSection}</h3>
@@ -362,6 +379,9 @@
                                     <ShSwitch checked={editingPreset.promptCaching.extendTtlOnHit ?? true} onCheckedChange={(v) => { editingPreset.promptCaching = { ...editingPreset.promptCaching, enabled: true, extendTtlOnHit: v } }} />
                                 </div>
                             </div>
+                            {#if showAutoCachePointToggle}
+                                {@render autoCachePointToggle(true)}
+                            {/if}
                             <ShAccordion name={language.modelPresetCacheAdvanced} variant="card" class="ml-4">
                                 <div class="flex flex-col gap-4 p-2">
                                     <div class="flex items-center justify-between gap-3">
@@ -398,6 +418,9 @@
                                 options={anthropicCacheOptions}
                             />
                         </div>
+                        {#if showAutoCachePointToggle && (editingPreset.anthropicCacheTtl ?? '5m') !== 'off'}
+                            {@render autoCachePointToggle(false)}
+                        {/if}
                     </div>
                 {/if}
                 <SchemaFormRenderer

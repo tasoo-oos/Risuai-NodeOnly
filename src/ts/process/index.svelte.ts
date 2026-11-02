@@ -23,8 +23,9 @@ import { runInlayScreen } from "./inlayScreen";
 import { runImageEmbedding } from "./transformers";
 import { runLuaEditTrigger } from "./scriptings";
 import { getModelInfo, LLMFlags } from "../model/modellist";
-import { resolveChatModelBinding, resolveClassicModelId, resolvePresetMaxOutputTokens, presetSupportsVision } from "./request/modelPresetBinding";
+import { resolveChatModelBinding, resolvePresetMaxOutputTokens, presetSupportsVision } from "./request/modelPresetBinding";
 import type { ProviderJobResult } from "./request/providerJob";
+import { resolveMainPromptTarget, resolvePromptShaping } from "./request/promptShaping";
 import { hypaMemoryV3 } from "./memory/hypav3";
 import { getActiveHypaV3Preset } from "./memory/memoryPresets"
 import { resolveModelPresetContextBudget } from "./request/contextBudget"
@@ -349,17 +350,15 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
     }
 
-    // The classic model the main request goes to (a slot-pinned legacy model
-    // included); the global db.aiModel when the main slot is a ModelPreset, as
-    // before. Drives the classic prompt-shaping checks below.
-    const mainModel = resolveClassicModelId(nowChatroom.chats[selectedChat], 'model') ?? DBState.db.aiModel
-    let caculatedChatTokens = 0
-    if(mainModel.startsWith('gpt')){
-        caculatedChatTokens += 5
-    }
-    else{
-        caculatedChatTokens += 3
-    }
+    // Where the main request goes: the classic model (a slot-pinned legacy
+    // model included) or the bound ModelPreset. Drives the model-dependent
+    // prompt shaping below; a preset chat never reads the global db.aiModel.
+    const mainTarget = resolveMainPromptTarget(nowChatroom.chats[selectedChat])
+    const promptShaping = resolvePromptShaping(mainTarget)
+    const mainSupportsImageInput = mainTarget.kind === 'modelPreset'
+        ? presetSupportsVision(mainTarget.preset)
+        : getModelInfo(mainTarget.model).flags.includes(LLMFlags.hasImageInput)
+    const caculatedChatTokens = promptShaping.chatAdditionalTokens
 
     currentChar = nowChatroom
 
@@ -369,7 +368,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     await hydrateAssetListsForCbs(currentChar, promptCbsSources(currentChar, nowChatroom.chats[selectedChat]))
 
     let chatAdditonalTokens = arg.chatAdditonalTokens ?? caculatedChatTokens
-    const tokenizer = new ChatTokenizer(chatAdditonalTokens, mainModel.startsWith('gpt') ? 'noName' : 'name', mainModel)
+    const tokenizer = new ChatTokenizer(chatAdditonalTokens, promptShaping.tokenizerNameMode, promptShaping.tokenizerTarget)
     let currentChat = runCurrentChatFunction(nowChatroom.chats[selectedChat])
     nowChatroom.chats[selectedChat] = currentChat
     let maxContextTokens = DBState.db.maxContext
@@ -377,7 +376,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     // global db.maxResponse (the "[채팅 봇]" max response size), overridden below
     // when this chat is bound to a ModelPreset.
     let maxResponseTokens = DBState.db.maxResponse
-    let presetVisionCapable = false
     // Where maxContextTokens came from, for the token-limit errors below:
     // users cannot otherwise tell a registry context-window cap from their
     // own settings.
@@ -402,7 +400,6 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             // first message fail with a false "too much token" error.
             const presetOut = resolvePresetMaxOutputTokens(mainBinding.preset)
             if (presetOut !== undefined) maxResponseTokens = presetOut
-            presetVisionCapable = presetSupportsVision(mainBinding.preset)
         }
     }
 
@@ -892,7 +889,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
 
     let chats:OpenAIChat[] = examples
 
-    if(!mainModel.startsWith('novelai') && !DBState.db?.promptSettings?.trimStartNewChat){
+    if(promptShaping.addStartNewChatMarker && !DBState.db?.promptSettings?.trimStartNewChat){
         chats.push({
             role: 'system',
             content: '[Start a new chat]',
@@ -997,13 +994,12 @@ export async function sendChat(chatProcessIndex = -1,arg:{
         }
 
         let multimodal:MultiModal[] = []
-        const modelinfo = getModelInfo(mainModel)
         if(inlays.length > 0){
             for(const inlay of inlays){
                 const inlayName = inlay.replace('{{inlayed::', '').replace('{{inlay::', '').replace('}}', '').replace('{{inlayeddata::', '')
                 const inlayData = await getInlayAsset(inlayName)
                 if(inlayData?.type === 'image'){
-                    if(modelinfo.flags.includes(LLMFlags.hasImageInput) || presetVisionCapable){
+                    if(mainSupportsImageInput){
                         multimodal.push({
                             type: 'image',
                             base64: inlayData.data,
@@ -1241,7 +1237,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
     }
 
     //continue chat model
-    if(arg.continue && (mainModel.startsWith('claude') || mainModel.startsWith('gpt') || mainModel.startsWith('openrouter') || mainModel.startsWith('reverse_proxy'))){
+    if(arg.continue && promptShaping.addContinueMarker){
         unformated.postEverything.push({
             role: 'system',
             content: '[Continue the last response]'
@@ -1253,7 +1249,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
             if(!chat.content.trim() && !(chat.multimodals && chat.multimodals.length > 0)){
                 continue
             }
-            if(!(mainModel.startsWith('gpt') || mainModel.startsWith('claude') || mainModel === 'openrouter' || mainModel === 'reverse_proxy')){
+            if(!promptShaping.mergeSystemPrompts){
                 formated.push(chat)
                 continue
             }
@@ -1426,7 +1422,7 @@ export async function sendChat(chatProcessIndex = -1,arg:{
                     }
                     pushPrompts(chats)
 
-                    if(DBState.db.automaticCachePoint && !hasCachePoint){
+                    if(promptShaping.autoCachePoint && !hasCachePoint){
                         let pointer = formated.length - 1
                         let depthRemaining = 3
                         while(pointer >= 0){

@@ -125,7 +125,7 @@ export const helpKo = {
         "presetChain": "비어있지 않으면 사용자가 메시지를 보낼 때마다 이 입력의 프리셋 목록에서 무작위로 프리셋이 변경 및 적용됩니다. 프리셋 목록은 쉼표로 구분해야 합니다. 예: `preset1,preset2`.",
         "legacyMediaFindings": "활성화하면 추가 검색 알고리즘을 사용하지 않고 기존 방식으로 미디어 에셋을 찾습니다.",
         "comfyWorkflow": "Comfy UI의 API 워크플로우를 입력하세요. Comfy UI에서 'Workflow > Export (API)' 버튼을 눌러 API 워크플로우를 가져올 수 있습니다. 워크플로우 텍스트에 {{risu_prompt}}를 넣어야 하며, {{risu_prompt}}는 Risu에서 제공하는 프롬프트로 대체됩니다.",
-        "automaticCachePoint": "채팅이 끝난 후 캐싱 포인트가 없으면 자동으로 생성합니다. 지원되는 기존 Claude 및 ModelPreset Gemini 컨텍스트 캐시 경로에서 사용됩니다.",
+        "automaticCachePoint": "채팅이 끝난 후 캐싱 포인트가 존재하지 않으면 자동으로 생성합니다. 모델 프리셋을 쓰는 채팅은 이 설정 대신 프리셋의 자동 캐시 포인트를 따릅니다.",
         "experimentalChatCompressionDesc": "사용하지 않는 채팅 데이터를 압축하여 별도 파일에 저장합니다. 채팅 데이터 크기를 크게 줄이고 성능을 크게 향상시키지만, 실험적 기능이며 불안정할 수 있어 백업 기능 등에서 문제를 일으킬 수 있습니다.",
         "promptInfoInsideChatDesc": "활성화되면 채팅 메타데이터에 프롬프트 프리셋 정보를 저장합니다. 저장되는 정보는 프롬프트 프리셋 이름과 활성화된 토글, 그리고 프롬프트 텍스트입니다. 약간의 처리 시간과 용량을 차지할 수 있습니다.",
         "autoAdjustSchema": "활성화하면 Dynamic Output을 위한 JSON 스키마가 자동으로 조정됩니다.",

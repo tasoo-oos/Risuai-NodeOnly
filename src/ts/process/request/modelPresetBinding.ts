@@ -1,6 +1,7 @@
 import { getDatabase, type Chat, type Database } from 'src/ts/storage/database.svelte'
 import type { AdapterCredential } from 'src/ts/preset/adapter'
-import { ANTHROPIC_CACHE_TTLS, parseLegacySlot, VISION_CAPABLE_ADAPTER_KINDS, type AnthropicCacheTtl, type ModelPreset } from 'src/ts/preset/types'
+import { ANTHROPIC_FALLBACK_MAX_TOKENS } from 'src/ts/preset/adapter/anthropicMessages'
+import { ANTHROPIC_CACHE_TTLS, parseLegacySlot, VISION_CAPABLE_ADAPTER_KINDS, type AnthropicCacheTtl, type ModelPreset, type RegistryTokenizer } from 'src/ts/preset/types'
 import type { ModelModeExtended } from './shared'
 
 /**
@@ -148,6 +149,40 @@ export function classicModelIdFor(
     return base
 }
 
+/**
+ * Classic fallback model ids for a request in `mode`. A request that resolves
+ * to a ModelPreset gets none: db.fallbackModels holds classic model ids, and a
+ * fallback attempt bypasses binding resolution (staticModel), so using them
+ * would send a preset chat's prompt to a classic model with the global
+ * key and URL.
+ */
+export function resolveClassicFallbackModels(
+    chat: Chat | null | undefined,
+    mode: ModelModeExtended,
+    moduleId?: string,
+): string[] {
+    if (resolveChatModelBinding(chat, mode, moduleId).kind === 'modelPreset') return []
+    const list = (getDatabase()?.fallbackModels as Record<string, string[]> | undefined)?.[mode]
+    return Array.isArray(list) ? [...list] : []
+}
+
+/**
+ * Tokenizer used to count a ModelPreset's prompt: the preset's own override,
+ * then the profile's recommendation, then a default for the adapter kind.
+ * Never the global classic config (db.aiModel / db.customTokenizer), which
+ * says nothing about the model this preset talks to.
+ */
+export function resolvePresetTokenizer(preset: ModelPreset): RegistryTokenizer {
+    if (preset.tokenizerOverride) return preset.tokenizerOverride
+    const snapshot = preset.profileSnapshot
+    if (snapshot?.recommendedTokenizer) return snapshot.recommendedTokenizer
+    switch (snapshot?.adapterKind) {
+        case 'anthropic-messages': return 'claude'
+        case 'google-gemini': return 'gemma'
+        default: return 'tik'
+    }
+}
+
 /** The classic model id `chat` would send `mode` to, or undefined when that
  * request goes to a ModelPreset (or is blocked). */
 export function resolveClassicModelId(chat: Chat | null | undefined, mode: ModelModeExtended, moduleId?: string): string | undefined {
@@ -192,8 +227,8 @@ export function presetAnthropicCacheTtl(preset: ModelPreset): AnthropicCacheTtl 
  * further injects 4096 on the wire — so without it such presets would wrongly
  * reserve db.maxResponse and re-trigger the false "too much token" error.
  *
- * Returns undefined when the preset declares no output-token value anywhere, so
- * the caller falls back to db.maxResponse.
+ * Returns undefined when neither the preset nor its adapter sets an
+ * output-token value, so the caller falls back to db.maxResponse.
  *
  * NOTE: a power user who overrides max_tokens via the preset's customBody /
  * additional-params textarea is not reflected here (the budget may then slightly
@@ -230,6 +265,12 @@ export function resolvePresetMaxOutputTokens(preset: ModelPreset): number | unde
             const raw = getNested(defaults as Record<string, unknown>, path)
             if (isPositiveNumber(raw)) return raw
         }
+    }
+    // The Anthropic adapter puts max_tokens on the wire even when the preset
+    // declares none (Anthropic requires it). Reserve that same value, so the
+    // budget doesn't fall back to the unrelated global db.maxResponse.
+    if (preset.profileSnapshot?.adapterKind === 'anthropic-messages') {
+        return ANTHROPIC_FALLBACK_MAX_TOKENS
     }
     return undefined
 }
