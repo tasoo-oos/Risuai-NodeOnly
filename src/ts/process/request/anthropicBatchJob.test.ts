@@ -1,7 +1,22 @@
-import { describe, expect, test } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { prepareAnthropicChatRequest, type AdapterPreparedRequest } from 'src/ts/preset/adapter'
 import type { ModelPreset } from 'src/ts/preset/types'
-import { AnthropicBatchJob, anthropicBatchBaseUrl, previewAnthropicBatchRequest, submitAnthropicBatchJob, type AnthropicBatchRequestLog } from './anthropicBatchJob'
+
+// The request-log sink: keep the real body stripping, capture the POSTed rows.
+const recordRequestLog = vi.fn()
+vi.mock('src/ts/storage/database.svelte', () => ({ getDatabase: () => ({}) }))
+vi.mock('src/ts/log', () => ({ getClientId: () => 'test' }))
+vi.mock('src/ts/requestLog', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('src/ts/requestLog')>()),
+    recordRequestLog: (...args: unknown[]) => recordRequestLog(...args),
+}))
+
+const {
+    AnthropicBatchJob, anthropicBatchBaseUrl, createAnthropicBatchRequestLogger, previewAnthropicBatchRequest, submitAnthropicBatchJob,
+} = await import('./anthropicBatchJob')
+type AnthropicBatchRequestLog = import('./anthropicBatchJob').AnthropicBatchRequestLog
+
+beforeEach(() => recordRequestLog.mockReset())
 
 interface CapturedCall {
     url: string
@@ -337,8 +352,9 @@ describe('Anthropic preset batch jobs', () => {
         expect(statusCall?.signal).toBeNull()
     })
 
-    test('logs one entry per batch with the results JSONL as the response body', async () => {
+    test('logs the submission at once, then the results JSONL as the response body', async () => {
         const logs: AnthropicBatchRequestLog[] = []
+        const ack = { id: 'msgbatch_123', type: 'message_batch', processing_status: 'in_progress' }
         const resultsBody = JSON.stringify({
             custom_id: 'custom-1',
             result: {
@@ -353,12 +369,12 @@ describe('Anthropic preset batch jobs', () => {
         let clock = 1_000
         const { fetchImpl, calls } = captureFetch((call) => {
             clock += 500
-            if (call.url.endsWith('/cancel')) return jsonResponse({ id: 'batch_123', processing_status: 'canceling' })
+            if (call.url.endsWith('/cancel')) return jsonResponse({ id: 'msgbatch_123', processing_status: 'canceling' })
             if (call.url.endsWith('/results')) {
                 return new Response(resultsBody, { status: 200, headers: { 'Content-Type': 'application/binary' } })
             }
-            if (call.url.endsWith('/batch_123')) return jsonResponse({ processing_status: 'ended' })
-            return jsonResponse({ id: 'batch_123', processing_status: 'in_progress' })
+            if (call.url.endsWith('/msgbatch_123')) return jsonResponse({ processing_status: 'ended' })
+            return jsonResponse(ack)
         })
 
         const submitted = await submitAnthropicBatchJob({
@@ -372,34 +388,48 @@ describe('Anthropic preset batch jobs', () => {
 
         expect(submitted.ok).toBe(true)
         if (submitted.ok === false) return
-        // Submitting alone does not log: the row waits for the batch result.
-        expect(logs).toHaveLength(0)
+        // The accepted (billed) batch is on record before anything waits on it.
+        expect(logs).toHaveLength(1)
+        const submitRow = logs[0]
+        const expectedBody = { requests: [{ custom_id: 'custom-1', params: prepared().body }] }
+        expect(submitRow).toMatchObject({
+            phase: 'submit',
+            url: 'https://api.anthropic.com/v1/messages/batches',
+            method: 'POST',
+            status: 200,
+            success: true,
+            aborted: false,
+            startedAt: 1_000,
+            durationMs: 500,
+        })
+        expect(JSON.parse(submitRow.requestBody)).toEqual(expectedBody)
+        expect(JSON.parse(submitRow.responseBody ?? '')).toEqual(ack)
 
         await submitted.job.cancel()
         const result = await submitted.job.wait()
-        // A repeated wait must not produce a second row.
+        // A repeated wait must not produce a second result row.
         await submitted.job.wait()
 
         expect(result).toEqual({ type: 'success', result: 'Logged final text' })
         expect(calls.some((call) => call.url.endsWith('/cancel'))).toBe(true)
-        expect(calls.some((call) => call.url.endsWith('/batch_123') && call.method === 'GET')).toBe(true)
-        expect(logs).toHaveLength(1)
-        const [log] = logs
-        expect(log.url).toBe('https://api.anthropic.com/v1/messages/batches')
-        expect(log.method).toBe('POST')
-        expect(log.requestHeaders).toEqual(prepared().headers)
-        expect(JSON.parse(log.requestBody)).toEqual({
-            requests: [{ custom_id: 'custom-1', params: prepared().body }],
-        })
-        expect(log.responseBody).toBe(resultsBody)
-        expect(log.responseType).toBe('application/binary')
-        expect(log.status).toBe(200)
-        expect(log.success).toBe(true)
-        expect(log.aborted).toBe(false)
-        expect(log.errorMessage).toBeUndefined()
-        expect(log.usage).toMatchObject({ promptTokens: 11, completionTokens: 7 })
-        expect(log.startedAt).toBe(1_000)
-        expect(log.durationMs).toBeGreaterThan(0)
+        expect(calls.some((call) => call.url.endsWith('/msgbatch_123') && call.method === 'GET')).toBe(true)
+        expect(logs).toHaveLength(2)
+        const resultRow = logs[1]
+        expect(resultRow.phase).toBe('result')
+        // The batch id is in the URL, so the row matches the Anthropic console.
+        expect(resultRow.url).toBe('https://api.anthropic.com/v1/messages/batches/msgbatch_123/results')
+        expect(resultRow.method).toBe('GET')
+        expect(resultRow.requestHeaders).toEqual(prepared().headers)
+        expect(JSON.parse(resultRow.requestBody)).toEqual(expectedBody)
+        expect(resultRow.responseBody).toBe(resultsBody)
+        expect(resultRow.responseType).toBe('application/binary')
+        expect(resultRow.status).toBe(200)
+        expect(resultRow.success).toBe(true)
+        expect(resultRow.aborted).toBe(false)
+        expect(resultRow.errorMessage).toBeUndefined()
+        expect(resultRow.usage).toMatchObject({ promptTokens: 11, completionTokens: 7 })
+        expect(resultRow.startedAt).toBe(1_000)
+        expect(resultRow.durationMs).toBeGreaterThan(submitRow.durationMs)
     })
 
     test('logs final expired results without status polling noise', async () => {
@@ -429,12 +459,13 @@ describe('Anthropic preset batch jobs', () => {
 
         expect(result).toEqual({ type: 'fail', result: 'Anthropic batch request expired' })
         expect(statusPolls).toBe(3)
-        expect(logs).toHaveLength(1)
-        expect(logs[0].responseBody).toBe(expiredJsonl())
-        expect(logs[0].success).toBe(false)
-        expect(logs[0].aborted).toBe(false)
-        expect(logs[0].errorMessage).toBe('Anthropic batch request expired')
-        expect(logs[0].usage).toBeUndefined()
+        expect(logs.map((log) => log.phase)).toEqual(['submit', 'result'])
+        expect(logs[1].url).toBe('https://api.anthropic.com/v1/messages/batches/batch_123/results')
+        expect(logs[1].responseBody).toBe(expiredJsonl())
+        expect(logs[1].success).toBe(false)
+        expect(logs[1].aborted).toBe(false)
+        expect(logs[1].errorMessage).toBe('Anthropic batch request expired')
+        expect(logs[1].usage).toBeUndefined()
     })
 
     test('logs canceled batch results as aborted', async () => {
@@ -468,6 +499,7 @@ describe('Anthropic preset batch jobs', () => {
 
         expect(result).toEqual({ type: 'fail', result: '{"error":"not found"}' })
         expect(logs).toHaveLength(1)
+        expect(logs[0].url).toBe('https://api.anthropic.com/v1/messages/batches/batch_123')
         expect(logs[0].status).toBe(404)
         expect(logs[0].responseBody).toBe('{"error":"not found"}')
         expect(logs[0].success).toBe(false)
@@ -492,6 +524,7 @@ describe('Anthropic preset batch jobs', () => {
 
         expect(logs).toHaveLength(2)
         expect(logs[0]).toMatchObject({
+            phase: 'submit',
             url: 'https://api.anthropic.com/v1/messages/batches',
             status: 401,
             success: false,
@@ -502,6 +535,28 @@ describe('Anthropic preset batch jobs', () => {
         expect(logs[1]).toMatchObject({ success: false, errorMessage: 'network down' })
         expect(logs[1].status).toBeUndefined()
         expect(logs[1].responseBody).toBeUndefined()
+    })
+
+    test('a batch canceled right after creation is still on record', async () => {
+        const logs: AnthropicBatchRequestLog[] = []
+        const { fetchImpl } = captureFetch((call) => {
+            if (call.url.endsWith('/cancel')) return jsonResponse({ id: 'batch_123', processing_status: 'canceling' })
+            return jsonResponse({ id: 'batch_123' })
+        })
+        const submitted = await submitAnthropicBatchJob({
+            prepared: prepared(),
+            fetchImpl,
+            customId: 'custom-1',
+            onRequestLog: (entry) => logs.push(entry),
+        })
+        expect(submitted.ok).toBe(true)
+        if (submitted.ok === false) return
+        // Mirrors the tool loop's abort path: cancel, then throw without waiting.
+        await submitted.job.cancel()
+
+        expect(logs).toHaveLength(1)
+        expect(logs[0]).toMatchObject({ phase: 'submit', success: true })
+        expect(logs[0].responseBody).toContain('batch_123')
     })
 
     test('logging failures never affect the batch', async () => {
@@ -596,5 +651,81 @@ describe('Anthropic preset batch jobs', () => {
             customId: 'custom-1',
         })
         expect(missingId).toEqual({ ok: false, error: 'No batch id returned from Anthropic batch request' })
+    })
+})
+
+describe('createAnthropicBatchRequestLogger', () => {
+    const entry = (overrides: Partial<AnthropicBatchRequestLog> = {}): AnthropicBatchRequestLog => ({
+        phase: 'result',
+        startedAt: 1_000,
+        durationMs: 2_500,
+        url: 'https://api.anthropic.com/v1/messages/batches/msgbatch_1/results',
+        method: 'GET',
+        requestHeaders: { 'x-api-key': 'sk-ant-secret', 'anthropic-version': '2023-06-01' },
+        requestBody: '{"requests":[{"custom_id":"c","params":{"img":"data:image/png;base64,AAAAAAAAAAAA"}}]}',
+        status: 200,
+        success: true,
+        aborted: false,
+        responseBody: '{"custom_id":"c","result":{"type":"succeeded"}}\n',
+        responseType: 'application/binary',
+        usage: { promptTokens: 11, completionTokens: 7, cachedTokens: 3, reasoningTokens: 2 },
+        ...overrides,
+    })
+
+    test('maps a batch row onto the request log under the generation key', () => {
+        let route: 'direct' | 'proxy' | undefined
+        const log = createAnthropicBatchRequestLogger({
+            source: 'main',
+            genId: 'gen-1',
+            model: 'claude-test',
+            provider: 'anthropic',
+            route: () => route,
+        })
+        route = 'proxy'
+        log(entry())
+
+        expect(recordRequestLog).toHaveBeenCalledTimes(1)
+        const row = recordRequestLog.mock.calls[0][0]
+        expect(row).toMatchObject({
+            timestamp: 1_000,
+            category: 'llm',
+            source: 'main',
+            chatId: 'gen-1',
+            generationId: 'gen-1',
+            model: 'claude-test',
+            provider: 'anthropic',
+            url: 'https://api.anthropic.com/v1/messages/batches/msgbatch_1/results',
+            method: 'GET',
+            status: 200,
+            success: true,
+            aborted: false,
+            route: 'proxy',
+            streaming: false,
+            durationMs: 2_500,
+            responseType: 'application/binary',
+            inputTokens: 11,
+            outputTokens: 7,
+            cachedTokens: 3,
+            reasoningTokens: 2,
+        })
+        // Headers go through unmasked; the server masks credentials on ingest.
+        expect(JSON.parse(row.requestHeaders)).toEqual(entry().requestHeaders)
+        expect(row.requestBody).not.toContain('base64')
+        expect(row.requestBody).toContain('KB omitted')
+        // Trailing JSONL newline is dropped so the viewer can pretty-print it.
+        expect(row.responseBody).toBe('{"custom_id":"c","result":{"type":"succeeded"}}')
+    })
+
+    test('keeps an absent response body absent and records failures', () => {
+        const log = createAnthropicBatchRequestLogger({
+            source: 'sub', genId: 'aux-1', model: 'm', provider: 'anthropic', route: () => undefined,
+        })
+        log(entry({ success: false, responseBody: undefined, status: undefined, errorMessage: 'network down', usage: undefined }))
+
+        const row = recordRequestLog.mock.calls[0][0]
+        expect(row).toMatchObject({ success: false, errorMessage: 'network down', source: 'sub' })
+        expect(row.responseBody).toBeUndefined()
+        expect(row.inputTokens).toBeUndefined()
+        expect(row.route).toBeUndefined()
     })
 })
