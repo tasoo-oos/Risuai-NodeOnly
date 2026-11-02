@@ -414,7 +414,9 @@ function tick(): void {
             // 'background' entries are exempt: a reattached server-side job
             // legitimately runs up to the 65-min poll deadline, and its poll
             // loop always ends the entry itself (that deadline is their GC).
-            if (!isTerminalPhase(e.phase) && e.phase !== 'background' && now - e.startedAt > STATUS_ABANDON_MS) {
+            // Long-running provider jobs (Anthropic batches run up to 24h)
+            // carry their own cap in abandonAfterMs.
+            if (!isTerminalPhase(e.phase) && e.phase !== 'background' && now - e.startedAt > (e.abandonAfterMs ?? STATUS_ABANDON_MS)) {
                 changed = true
                 continue // omit from next → removed, timer can stop
             }

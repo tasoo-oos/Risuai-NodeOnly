@@ -346,6 +346,17 @@ describe('render timer', () => {
         expect(clearSpy).toHaveBeenCalled()                // timer self-stopped
     })
 
+    it('keeps an entry with a longer abandonAfterMs past the default cap, then culls it at its own cap', () => {
+        vi.useFakeTimers()
+        const start = Date.now()
+        const longCap = STATUS_ABANDON_MS * 3
+        startStatus('g1', { kind: 'main', label: 'x', phase: 'waiting', abandonAfterMs: longCap, now: start })
+        vi.advanceTimersByTime(STATUS_ABANDON_MS + 60_000)
+        expect(get(requestStatuses).get('g1')?.phase).toBe('waiting')
+        vi.advanceTimersByTime(longCap - STATUS_ABANDON_MS)
+        expect(get(requestStatuses).has('g1')).toBe(false)
+    })
+
     it('exempts background entries from the abandon cull (jobs run up to 65min)', () => {
         vi.useFakeTimers()
         const start = Date.now()
