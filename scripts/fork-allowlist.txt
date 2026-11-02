@@ -64,3 +64,13 @@ src/lib/UI/ModelPresetList.svelte
 
 # Localized strings for fork-only flags
 src/lang/*.ts
+
+# Model preset request isolation (own cache point, independent of the classic model)
+src/lib/Setting/Pages/Model/ModelPresetSettings.svelte
+src/ts/preset/types.ts
+src/ts/process/request/modelPresetBinding.test.ts
+src/ts/process/request/modelPresetBinding.ts
+src/ts/process/request/promptShaping.test.ts
+src/ts/process/request/promptShaping.ts
+src/ts/tokenizer.test.ts
+src/ts/tokenizer.ts
