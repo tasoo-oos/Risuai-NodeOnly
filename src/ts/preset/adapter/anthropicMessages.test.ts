@@ -386,6 +386,25 @@ describe('sendAnthropicChatRequest (non-stream)', () => {
             .toEqual({ type: 'ephemeral', ttl: '1h' })
     })
 
+    test('deprecated anthropicCache1h still means 1h, and anthropicCacheTtl wins over it', async () => {
+        const send = async (extra: Record<string, unknown>) => {
+            const { fetchImpl, calls } = captureFetch(
+                jsonResponse({ content: [{ type: 'text', text: 'ok' }] }),
+            )
+            await sendAnthropicChatRequest(
+                makePreset(),
+                { messages: [{ role: 'user', content: 'hi', cachePoint: true }], fetchImpl, ...extra },
+                { apiKey: 'k' },
+            )
+            return calls[0]
+        }
+        const legacy = await send({ anthropicCache1h: true })
+        expect(legacy.body.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+        expect(legacy.headers['anthropic-beta']).toBe('extended-cache-ttl-2025-04-11')
+        const off = await send({ anthropicCache1h: true, anthropicCacheTtl: 'off' })
+        expect(JSON.stringify(off.body)).not.toContain('cache_control')
+    })
+
     test("anthropicCacheTtl '5m' (and unset) sends a bare ephemeral breakpoint", async () => {
         for (const anthropicCacheTtl of [undefined, '5m'] as const) {
             const { fetchImpl, calls } = captureFetch(

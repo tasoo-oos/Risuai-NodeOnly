@@ -5,15 +5,15 @@ export type AdapterKind =
     | 'anthropic-messages'
     | 'google-gemini'
 
-// Adapter kinds whose tool (function-calling) wire is actually implemented.
-// Both the runtime gate (requestModelPreset) and the editor toggle UI check
-// membership so a preset can never enable tools on an adapter that would reject
-// tool-role messages. Grows as each adapter's tool wire lands.
 /** Anthropic prompt-cache mode of a ModelPreset: no breakpoints, or a 5m / 1h TTL. */
 export type AnthropicCacheTtl = 'off' | '5m' | '1h'
 
 export const ANTHROPIC_CACHE_TTLS: readonly AnthropicCacheTtl[] = ['off', '5m', '1h']
 
+// Adapter kinds whose tool (function-calling) wire is actually implemented.
+// Both the runtime gate (requestModelPreset) and the editor toggle UI check
+// membership so a preset can never enable tools on an adapter that would reject
+// tool-role messages. Grows as each adapter's tool wire lands.
 export const TOOL_CAPABLE_ADAPTER_KINDS: readonly AdapterKind[] = [
     'openai-compatible',
     'anthropic-messages',

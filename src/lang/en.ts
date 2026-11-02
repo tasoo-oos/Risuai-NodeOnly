@@ -1544,7 +1544,7 @@ export const languageEnglish = {
     modelPresetCacheGrowthHelp: "Recreate the cache once the prompt has grown by this many tokens since it was created.",
     modelPresetAnthropicCacheSection: "Prompt caching",
     modelPresetAnthropicCache: "Cache mode",
-    modelPresetAnthropicCacheHelp: "Off sends no cache breakpoints, so nothing is cached or billed as a cache write. 5 min is Anthropic's default lifetime; 1 hour keeps the prefix longer between turns but cache writes cost more. Breakpoints are placed by the cache card in your prompt template (or Automatic Cache Point).",
+    modelPresetAnthropicCacheHelp: "Off sends no cache breakpoints, so nothing is cached or billed as a cache write. 5 min is Anthropic's default lifetime; 1 hour keeps the prefix longer between turns but cache writes cost more. Breakpoints are placed by the cache card in your prompt template (or an Automatic Cache Point).",
     modelPresetAnthropicCacheOff: "Off",
     modelPresetAnthropicCache5m: "5 min",
     modelPresetAnthropicCache1h: "1 hour",

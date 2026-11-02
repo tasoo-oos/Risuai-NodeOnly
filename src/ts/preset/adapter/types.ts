@@ -199,6 +199,10 @@ export interface AdapterChatOptions {
      *  (`ModelPreset.anthropicCacheTtl`) by the caller because adapters never
      *  touch the database. Ignored by every other adapter. */
     anthropicCacheTtl?: AnthropicCacheTtl
+    /** @deprecated Use `anthropicCacheTtl`. Kept so callers that still pass the
+     *  old boolean (the Anthropic batch path) keep their 1h behavior; true means
+     *  '1h', and `anthropicCacheTtl` wins when both are set. */
+    anthropicCache1h?: boolean
     // Per-request identifier (= the message generationId issued in sendChat).
     // Threaded through so request-status / context-cache consumers can key
     // status and badges to this exact request. Optional and side-effect free:
