@@ -185,7 +185,7 @@ async function prepareAnthropicBody(
     //   - stream             → adapter controls the transport mode
     const modelId = resolveWireModelId(preset, { vendorName: 'Anthropic' })
     const { system, systemCachePoint, chat } = collectSystemAndChat(options.messages)
-    const cacheTtl = options.anthropicCacheTtl ?? (options.anthropicCache1h ? '1h' : '5m')
+    const cacheTtl = options.anthropicCacheTtl ?? '5m'
     // 'off' => no breakpoint reaches the wire at all, so Anthropic neither writes
     // nor reads a cache entry for this request.
     const cacheControl: AnthropicCacheControl | undefined = cacheTtl === 'off'

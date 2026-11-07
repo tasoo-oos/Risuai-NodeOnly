@@ -34,7 +34,7 @@ import {
     type AdapterToolCall, type AdapterToolDef, type AdapterUsage,
 } from "src/ts/preset/adapter";
 import { formatReasoningParts } from "src/ts/preset/adapter/reasoning";
-import { TOOL_CAPABLE_ADAPTER_KINDS, type AdapterKind, type ModelPreset } from "src/ts/preset/types";
+import { TOOL_CAPABLE_ADAPTER_KINDS, type AdapterKind, type AnthropicCacheTtl, type ModelPreset } from "src/ts/preset/types";
 import { resolveWireModelId } from "src/ts/preset/adapter/wireInvariants";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError } from "./jobFetch";
@@ -846,7 +846,7 @@ async function createAnthropicPresetBatchJob(
             arg,
             initialMessages: options.messages,
             tools: options.tools,
-            anthropicCache1h: options.anthropicCache1h,
+            anthropicCacheTtl: options.anthropicCacheTtl,
             onRequestLog,
         })
         : submission.job
@@ -867,7 +867,7 @@ function createAnthropicPresetBatchToolLoopJob(options: {
     arg: RequestDataArgumentExtended
     initialMessages: AdapterChatMessage[]
     tools: AdapterToolDef[]
-    anthropicCache1h?: boolean
+    anthropicCacheTtl?: AnthropicCacheTtl
     onRequestLog?: (entry: AnthropicBatchRequestLog) => void
 }): ProviderRequestJob {
     let currentJob: AnthropicBatchJob = options.firstJob
@@ -892,7 +892,7 @@ function createAnthropicPresetBatchToolLoopJob(options: {
                                 options.preset,
                                 {
                                     messages: convo, tools: options.tools, abortSignal: waitOptions.signal ?? undefined, fetchImpl: options.fetchImpl,
-                                    anthropicCache1h: options.anthropicCache1h,
+                                    anthropicCacheTtl: options.anthropicCacheTtl,
                                 },
                                 options.credential,
                                 false,
@@ -1083,8 +1083,8 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     // Anthropic prompt-cache mode (off / 5m / 1h) comes from the preset alone —
     // never the global classic db.claude1HourCaching. Breakpoints still ride on
     // message.cachePoint; this picks whether they are sent and their TTL. Shared
-    // by the preview, the send/stream options and every tool-loop turn so all
-    // three build the same body.
+    // by the preview, the send/stream options, the Anthropic batch submission and
+    // every tool-loop turn so all of them build the same body.
     const anthropicCacheTtl = presetAnthropicCacheTtl(preset)
 
     // Gemini context caching: MAIN chat requests on the google-gemini adapter
@@ -1213,7 +1213,12 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             const batchFetchImpl = makeProxiedFetch(arg.chatId, (route) => { batchRoute = route })
             const batchOptions: AdapterChatOptions = {
                 messages, tools, abortSignal: abortSignal ?? undefined, fetchImpl: batchFetchImpl,
-                anthropicCache1h: getDatabase().claude1HourCaching === true,
+                // Per-preset cache mode, exactly like the preview / send / stream
+                // options above — never the global classic db.claude1HourCaching,
+                // which belongs to the classic (non-preset) path only. Keeping the
+                // batch submission on the same value as previewBody is what makes
+                // the shown body and the submitted body match.
+                anthropicCacheTtl,
             }
             const prepared = await prepareAnthropicChatRequest(
                 preset,
