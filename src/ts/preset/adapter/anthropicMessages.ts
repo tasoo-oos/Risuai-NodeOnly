@@ -185,14 +185,19 @@ async function prepareAnthropicBody(
     //   - stream             → adapter controls the transport mode
     const modelId = resolveWireModelId(preset, { vendorName: 'Anthropic' })
     const { system, systemCachePoint, chat } = collectSystemAndChat(options.messages)
-    const cacheControl: AnthropicCacheControl = options.anthropicCache1h
-        ? { type: 'ephemeral', ttl: '1h' }
-        : { type: 'ephemeral' }
+    const cacheTtl = options.anthropicCacheTtl ?? (options.anthropicCache1h ? '1h' : '5m')
+    // 'off' => no breakpoint reaches the wire at all, so Anthropic neither writes
+    // nor reads a cache entry for this request.
+    const cacheControl: AnthropicCacheControl | undefined = cacheTtl === 'off'
+        ? undefined
+        : cacheTtl === '1h'
+            ? { type: 'ephemeral', ttl: '1h' }
+            : { type: 'ephemeral' }
     // Anthropic rejects a request carrying more than ANTHROPIC_MAX_CACHE_BREAKPOINTS
     // breakpoints. The cache prompt card's depth is free-form user input and this
     // adapter does not merge turns, so one breakpoint is emitted per flagged
     // message — a depth of 5 would 400 an otherwise valid request.
-    const cacheSystem = system.length > 0 && systemCachePoint
+    const cacheSystem = cacheControl !== undefined && system.length > 0 && systemCachePoint
     prepared.body.messages = toAnthropicWireMessages(
         chat,
         cacheControl,
@@ -209,7 +214,7 @@ async function prepareAnthropicBody(
     } else {
         delete prepared.body.system
     }
-    if (options.anthropicCache1h) {
+    if (cacheTtl === '1h') {
         // Parity with the classic path. The 1h TTL is GA everywhere Anthropic
         // publishes (first-party, Bedrock, Vertex), so this header is a leftover
         // from the beta period and is not required — it is sent because
@@ -269,7 +274,7 @@ function collectSystemAndChat(messages: AdapterChatMessage[]): {
 // the order Anthropic requires when thinking is enabled.
 function toAnthropicWireMessages(
     chat: AdapterChatMessage[],
-    cacheControl: AnthropicCacheControl,
+    cacheControl: AnthropicCacheControl | undefined,
     breakpointBudget: number,
 ): AnthropicWireMessage[] {
     const out: AnthropicWireMessage[] = []
@@ -283,7 +288,7 @@ function toAnthropicWireMessages(
         if (message.cachePoint) flagged.push(index)
     })
     const marked = new Set(
-        breakpointBudget > 0 ? flagged.slice(-breakpointBudget) : [],
+        cacheControl && breakpointBudget > 0 ? flagged.slice(-breakpointBudget) : [],
     )
 
     const flushToolResults = () => {

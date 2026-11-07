@@ -1,5 +1,5 @@
 import type { GeminiPromptCachingConfig } from '../cache/geminiContextCache'
-import type { ModelPreset } from '../types'
+import type { AnthropicCacheTtl, ModelPreset } from '../types'
 
 export interface AdapterCredential {
     apiKey?: string
@@ -193,10 +193,15 @@ export interface AdapterChatOptions {
      *  opted in — a strict server can reject the field with a 400. The adapter
      *  never reads the database itself, so the caller passes this in. */
     collectStreamUsage?: boolean
-    /** Extend Anthropic prompt-cache breakpoints to the 1-hour TTL instead of the
-     *  default 5 minutes. Same database flag the classic path reads
-     *  (`db.claude1HourCaching`); passed in because adapters never touch the
-     *  database. Ignored by every other adapter. */
+    /** Anthropic prompt caching: 'off' sends no cache_control (message.cachePoint
+     *  is ignored), '5m' the default ephemeral TTL, '1h' the 1-hour TTL plus the
+     *  extended-TTL beta header. Unset behaves as '5m'. Resolved from the preset
+     *  (`ModelPreset.anthropicCacheTtl`) by the caller because adapters never
+     *  touch the database. Ignored by every other adapter. */
+    anthropicCacheTtl?: AnthropicCacheTtl
+    /** @deprecated Use `anthropicCacheTtl`. Kept so callers that still pass the
+     *  old boolean (the Anthropic batch path) keep their 1h behavior; true means
+     *  '1h', and `anthropicCacheTtl` wins when both are set. */
     anthropicCache1h?: boolean
     // Per-request identifier (= the message generationId issued in sendChat).
     // Threaded through so request-status / context-cache consumers can key

@@ -341,7 +341,7 @@ describe('sendAnthropicChatRequest (non-stream)', () => {
         expect(Array.isArray(calls[0].body.system)).toBe(true)
     })
 
-    test('anthropicCache1h also opts into the extended-TTL beta header', async () => {
+    test('anthropicCacheTtl 1h also opts into the extended-TTL beta header', async () => {
         const { fetchImpl, calls } = captureFetch(
             jsonResponse({ content: [{ type: 'text', text: 'ok' }] }),
         )
@@ -350,7 +350,7 @@ describe('sendAnthropicChatRequest (non-stream)', () => {
             {
                 messages: [{ role: 'user', content: 'hi', cachePoint: true }],
                 fetchImpl,
-                anthropicCache1h: true,
+                anthropicCacheTtl: '1h',
             },
             { apiKey: 'k' },
         )
@@ -369,7 +369,7 @@ describe('sendAnthropicChatRequest (non-stream)', () => {
         expect(calls[0].headers['anthropic-beta']).toBeUndefined()
     })
 
-    test('anthropicCache1h upgrades the breakpoint TTL to 1h', async () => {
+    test('anthropicCacheTtl 1h upgrades the breakpoint TTL to 1h', async () => {
         const { fetchImpl, calls } = captureFetch(
             jsonResponse({ content: [{ type: 'text', text: 'ok' }] }),
         )
@@ -378,12 +378,74 @@ describe('sendAnthropicChatRequest (non-stream)', () => {
             {
                 messages: [{ role: 'user', content: 'turn 1', cachePoint: true }],
                 fetchImpl,
-                anthropicCache1h: true,
+                anthropicCacheTtl: '1h',
             },
             { apiKey: 'k' },
         )
         expect(calls[0].body.messages[0].content[0].cache_control)
             .toEqual({ type: 'ephemeral', ttl: '1h' })
+    })
+
+    test('deprecated anthropicCache1h still means 1h, and anthropicCacheTtl wins over it', async () => {
+        const send = async (extra: Record<string, unknown>) => {
+            const { fetchImpl, calls } = captureFetch(
+                jsonResponse({ content: [{ type: 'text', text: 'ok' }] }),
+            )
+            await sendAnthropicChatRequest(
+                makePreset(),
+                { messages: [{ role: 'user', content: 'hi', cachePoint: true }], fetchImpl, ...extra },
+                { apiKey: 'k' },
+            )
+            return calls[0]
+        }
+        const legacy = await send({ anthropicCache1h: true })
+        expect(legacy.body.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' })
+        expect(legacy.headers['anthropic-beta']).toBe('extended-cache-ttl-2025-04-11')
+        const off = await send({ anthropicCache1h: true, anthropicCacheTtl: 'off' })
+        expect(JSON.stringify(off.body)).not.toContain('cache_control')
+    })
+
+    test("anthropicCacheTtl '5m' (and unset) sends a bare ephemeral breakpoint", async () => {
+        for (const anthropicCacheTtl of [undefined, '5m'] as const) {
+            const { fetchImpl, calls } = captureFetch(
+                jsonResponse({ content: [{ type: 'text', text: 'ok' }] }),
+            )
+            await sendAnthropicChatRequest(
+                makePreset(),
+                {
+                    messages: [{ role: 'user', content: 'turn 1', cachePoint: true }],
+                    fetchImpl,
+                    anthropicCacheTtl,
+                },
+                { apiKey: 'k' },
+            )
+            expect(calls[0].body.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' })
+            expect(calls[0].headers['anthropic-beta']).toBeUndefined()
+        }
+    })
+
+    test("anthropicCacheTtl 'off' sends no cache_control and no beta header", async () => {
+        const { fetchImpl, calls } = captureFetch(
+            jsonResponse({ content: [{ type: 'text', text: 'ok' }] }),
+        )
+        await sendAnthropicChatRequest(
+            makePreset(),
+            {
+                messages: [
+                    { role: 'system', content: 'sys', cachePoint: true },
+                    { role: 'user', content: 'turn 1', cachePoint: true },
+                    { role: 'assistant', content: 'reply', cachePoint: true },
+                    { role: 'user', content: 'turn 2', cachePoint: true },
+                ],
+                fetchImpl,
+                anthropicCacheTtl: 'off',
+            },
+            { apiKey: 'k' },
+        )
+        expect(JSON.stringify(calls[0].body)).not.toContain('cache_control')
+        // System stays a plain string rather than a block carrying a breakpoint.
+        expect(calls[0].body.system).toBe('sys')
+        expect(calls[0].headers['anthropic-beta']).toBeUndefined()
     })
 
     test('annotating a providerEcho turn does not mutate the retained blocks', async () => {

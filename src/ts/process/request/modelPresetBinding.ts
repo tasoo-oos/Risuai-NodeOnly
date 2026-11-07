@@ -1,6 +1,6 @@
 import { getDatabase, type Chat, type Database } from 'src/ts/storage/database.svelte'
 import type { AdapterCredential } from 'src/ts/preset/adapter'
-import { parseLegacySlot, VISION_CAPABLE_ADAPTER_KINDS, type ModelPreset } from 'src/ts/preset/types'
+import { ANTHROPIC_CACHE_TTLS, parseLegacySlot, VISION_CAPABLE_ADAPTER_KINDS, type AnthropicCacheTtl, type ModelPreset } from 'src/ts/preset/types'
 import type { ModelModeExtended } from './shared'
 
 /**
@@ -160,6 +160,17 @@ export function presetSupportsVision(preset: ModelPreset): boolean {
     const caps = preset.profileSnapshot?.capabilities
     return VISION_CAPABLE_ADAPTER_KINDS.includes(kind)
         && ((caps?.includes('vision') ?? false) || preset.imageInput === true)
+}
+
+/**
+ * The Anthropic prompt-cache mode a ModelPreset requests. Reads only the preset
+ * (never `db.claude1HourCaching`, which belongs to the classic path): unset or
+ * unrecognised (e.g. a hand-edited import) means '5m', the global switch's
+ * factory default.
+ */
+export function presetAnthropicCacheTtl(preset: ModelPreset): AnthropicCacheTtl {
+    const ttl = preset.anthropicCacheTtl
+    return ttl !== undefined && ANTHROPIC_CACHE_TTLS.includes(ttl) ? ttl : '5m'
 }
 
 /**
