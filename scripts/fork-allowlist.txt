@@ -96,3 +96,7 @@ src/ts/process/request/jobRecovery.ts
 src/ts/process/request/jobRecoveryProxy.test.ts
 src/ts/process/request/requestPresetJob.test.ts
 src/ts/process/request/requestRetry.test.ts
+
+# Fixed-interval retry for Google 429 on model presets
+src/ts/process/request/rateLimitRetry.ts
+src/ts/process/request/rateLimitRetry.test.ts
