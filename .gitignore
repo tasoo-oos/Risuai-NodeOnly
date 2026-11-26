@@ -50,6 +50,8 @@ dist.zip
 !/scripts/portable/
 !/scripts/termux/
 !/scripts/check-help-keys.mjs
+!/scripts/fork-delta.sh
+!/scripts/fork-allowlist.txt
 .env
 /server/node/ssl/certificate
 /bin/

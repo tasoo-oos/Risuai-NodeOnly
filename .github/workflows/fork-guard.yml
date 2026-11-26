@@ -1,0 +1,24 @@
+name: Fork delta guard
+
+on:
+  pull_request:
+    branches: [beta, next]
+  push:
+    branches: [beta, next]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream develop
+        run: |
+          git remote add upstream https://github.com/PocketRisu/PocketRisu.git 2>/dev/null || true
+          git fetch --no-tags upstream develop
+
+      - name: Check fork delta against allowlist
+        run: scripts/fork-delta.sh upstream/develop
