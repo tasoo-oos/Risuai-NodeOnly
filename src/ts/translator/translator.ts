@@ -8,7 +8,10 @@ import {
 } from "./presets";
 import { globalFetch } from "../globalApi.svelte"
 import { notifyError } from "../alert"
-import { requestChatData, resolveRequestJob } from "../process/request/request"
+import { requestChatData } from "../process/request/request"
+// resolveRequestJob lives in providerJob.ts: modules whose tests mock
+// request.ts still get the real implementation (see request.ts's re-export).
+import { resolveRequestJob } from "../process/request/providerJob"
 import { doingChat, type OpenAIChat } from "../process/index.svelte"
 import { applyMarkdownToNode, risuChatParser, type simpleCharacterArgument } from "../parser/parser.svelte"
 import { selectedCharID } from "../stores.svelte"
