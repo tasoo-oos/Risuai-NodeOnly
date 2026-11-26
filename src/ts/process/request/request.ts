@@ -28,6 +28,7 @@ import {
     sendGoogleChatRequest, streamGoogleChatRequest, previewGoogleChatRequest,
     runToolLoop,
     ToolLoopAbortError,
+    ModelPresetAdapterError,
     type AdapterCacheContext,
     type AdapterChatMessage, type AdapterChatOptions, type AdapterChatResponse,
     type AdapterChatStreamDelta, type AdapterCredential,
@@ -39,13 +40,14 @@ import { resolveWireModelId } from "src/ts/preset/adapter/wireInvariants";
 import { pumpPresetStream } from "./presetStreamPump";
 import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError } from "./jobFetch";
 import { withBodyInterceptors } from "./bodyInterceptors";
+import { isGoogleRateLimitRetryTarget, withRateLimitRetry } from "./rateLimitRetry";
 import { toLogSource, toRequestKind } from "./logSource";
 import { resolveChatModelBinding, classicModelIdFor, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision, presetAnthropicCacheTtl } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, recordRequestLog, stripInlineMedia, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
 import {
-    startStatus, appendText, endStatus, setStatusTokenCounter, addBadge,
+    startStatus, appendText, endStatus, setStatusTokenCounter, addBadge, markPhase,
     type RequestKind,
 } from "src/ts/status/requestStatus";
 import type { ProviderJobResult, ProviderJobStatus, ProviderRequestJob } from './providerJob';
@@ -1085,7 +1087,21 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
     if (useServerJob) logScope.setRoute('job')
     // Body interceptors run outside the log scope so the log records the body
     // actually sent, as fetchNative's onRealBody does on the classic path.
-    const fetchImpl = withBodyInterceptors(logScope.wrap(transportFetch), `preset_${kind}`)
+    const loggedFetch = logScope.wrap(transportFetch)
+    const interceptedFetch = withBodyInterceptors(loggedFetch, `preset_${kind}`)
+
+    // Google (AI Studio / Vertex) answers 429 RESOURCE_EXHAUSTED when shared
+    // capacity is busy; re-send at a fixed interval until it clears or the
+    // user stops. Wrapped outside the log scope so every attempt is recorded.
+    // Other providers keep the transport unchanged.
+    const googleRateLimitRetry = isGoogleRateLimitRetryTarget(kind, preset.profileSnapshot.providerBaseId)
+    const fetchImpl = googleRateLimitRetry
+        ? withRateLimitRetry(interceptedFetch, {
+            onRetry: () => {
+                if (reportStatus) safeStatus(() => markPhase(genId, 'retrying', Date.now()))
+            },
+        })
+        : interceptedFetch
 
     // Vision gate: send attached images when the adapter implements image wire AND
     // either the profile declares the 'vision' capability OR the user opted in via
@@ -1382,7 +1398,10 @@ async function requestModelPreset(arg:RequestDataArgumentExtended, preset:ModelP
             // chat): a re-send would only hit the per-chat guard again, so
             // spending the retry budget here just replaces the real failure
             // text with "busy" (issue #87).
-            noRetry: err instanceof ModelJobBusyError || err instanceof ModelJobConnectionLostError,
+            noRetry: err instanceof ModelJobBusyError || err instanceof ModelJobConnectionLostError
+                // A Google 429 that survived the fixed-interval retry cap above:
+                // another outer retry round would only repeat the whole cap.
+                || (googleRateLimitRetry && err instanceof ModelPresetAdapterError && err.kind === 'rate-limit'),
         }
     }
 }
