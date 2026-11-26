@@ -42,7 +42,7 @@ import { makeJobFetch, ModelJobBusyError, ModelJobConnectionLostError } from "./
 import { withBodyInterceptors } from "./bodyInterceptors";
 import { isGoogleRateLimitRetryTarget, withRateLimitRetry } from "./rateLimitRetry";
 import { toLogSource, toRequestKind } from "./logSource";
-import { resolveChatModelBinding, classicModelIdFor, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision, presetAnthropicCacheTtl } from "./modelPresetBinding";
+import { resolveChatModelBinding, resolveClassicFallbackModels, classicModelIdFor, buildModelPresetCredential, applyPromptPresetParams, presetSupportsVision, presetAnthropicCacheTtl } from "./modelPresetBinding";
 import { expandAdapterMessages, toAdapterMessage, toolResponseText } from "./modelPresetMessages";
 import { isLocalNetworkUrl } from "src/ts/network/localNetwork";
 import { createRequestLogScope, recordRequestLog, stripInlineMedia, type RequestLogRoute, type RequestLogSource, type RequestLogUsage } from "src/ts/requestLog";
@@ -187,7 +187,9 @@ export { resolveRequestJob }
 
 export async function requestChatData(arg:requestDataArgument, model:ModelModeExtended, abortSignal:AbortSignal=null):Promise<requestDataResponse> {
     const db = getDatabase()
-    const fallBackModels:string[] = safeStructuredClone(db?.fallbackModels?.[model] ?? [])
+    // Classic fallback ids only; a ModelPreset-bound request gets none (they
+    // would bypass the binding and hit a classic model).
+    const fallBackModels:string[] = resolveClassicFallbackModels(getCurrentChat(), model, arg.moduleId)
     const tools = arg.tools ?? (await getTools())
     fallBackModels.push('')
     let da:requestDataResponse

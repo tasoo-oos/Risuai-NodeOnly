@@ -214,7 +214,7 @@ export const helpZhHant = {
         "legacyMediaFindings": "啟用後，使用舊版方式搜尋媒體資源，不使用額外搜尋演算法",
         "comfyWorkflow":
             "填入 ComfyUI 的 API Workflow。可在 ComfyUI 按下「Workflow > Export (API)」匯出。Workflow 內容也必須包含 {{risu_prompt}}，Risu 會將它替換為實際提示詞",
-        "automaticCachePoint": "若對話結束時不存在快取點，會自動建立快取點",
+        "automaticCachePoint": "若對話結束時不存在快取點，會自動建立快取點。使用模型預設的對話會改用該預設自己的「自動快取點」設定",
         "experimentalChatCompressionDesc":
             "將未使用的對話資料壓縮並存到獨立檔案，可大幅減少對話資料大小並改善效能。但此功能仍屬實驗性，可能不穩定，也可能造成備份等功能出現問題",
         "promptInfoInsideChatDesc":
