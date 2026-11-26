@@ -9,6 +9,7 @@ import { writable, get } from "svelte/store"
 
 export type RequestPhase =
     | 'connecting'   // request sent, awaiting first byte
+    | 'waiting'      // long-running provider work is active; polling is expected
     | 'thinking'     // receiving reasoning
     | 'responding'   // receiving answer body
     | 'retrying'     // fallback / retry
@@ -48,6 +49,7 @@ export interface RequestStatusEntry {
     startedAt: number
     lastChunkAt: number                    // for stall detection
     endedAt?: number                       // set by endStatus; freezes total elapsed time
+    abandonAfterMs?: number                // override for long-running provider jobs
     retryAttempt?: number
     badges: StatusBadge[]
     error?: string
@@ -177,6 +179,7 @@ export interface StartStatusInit {
     label: string
     chatId?: string
     phase?: RequestPhase
+    abandonAfterMs?: number
     now: number
 }
 
@@ -194,6 +197,7 @@ export function startStatus(id: string, init: StartStatusInit): void {
             tokPerSec: 0,
             startedAt: init.now,
             lastChunkAt: init.now,
+            abandonAfterMs: init.abandonAfterMs,
             badges: [],
             thinkingText: '',
             responseText: '',
@@ -410,7 +414,9 @@ function tick(): void {
             // 'background' entries are exempt: a reattached server-side job
             // legitimately runs up to the 65-min poll deadline, and its poll
             // loop always ends the entry itself (that deadline is their GC).
-            if (!isTerminalPhase(e.phase) && e.phase !== 'background' && now - e.startedAt > STATUS_ABANDON_MS) {
+            // Long-running provider jobs (Anthropic batches run up to 24h)
+            // carry their own cap in abandonAfterMs.
+            if (!isTerminalPhase(e.phase) && e.phase !== 'background' && now - e.startedAt > (e.abandonAfterMs ?? STATUS_ABANDON_MS)) {
                 changed = true
                 continue // omit from next → removed, timer can stop
             }

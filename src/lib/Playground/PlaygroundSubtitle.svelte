@@ -6,7 +6,7 @@
     import Button from "../UI/GUI/Button.svelte";
     import { DBState } from "src/ts/stores.svelte";
     import { getModelInfo, LLMFlags } from "src/ts/model/modellist";
-    import { requestChatData } from "src/ts/process/request/request";
+    import { requestChatData, resolveRequestJob } from "src/ts/process/request/request";
     import { asBuffer, selectFileByDom, selectSingleFile, sleep } from "src/ts/util";
     import { alertSelect, notifyError } from "src/ts/alert";
     import { risuChatParser } from "src/ts/parser/parser.svelte";
@@ -77,7 +77,7 @@
             video.remove()
         }
 
-        const v =await requestChatData({
+        let v =await requestChatData({
             formated: [{
                 role: "user",
                 content: risuChatParser(prompt).replace(/{{slot}}/g, selLang).replace(/{{slot::time}}/g, time),
@@ -86,27 +86,34 @@
             bias: {},
             useStreaming: true
         }, 'model')
+        v = await resolveRequestJob(v)
 
         if(v.type === 'multiline'){
             notifyError(v.result[0][1])
             return
         }
 
-        if(v.type !== 'streaming'){
+        if(v.type === 'fail'){
             notifyError(v.result)
             return
         }
 
-        const reader = v.result.getReader()
+        if(v.type === 'success'){
+            outputText = v.result
+        }
 
-        while(true){
-            const { done, value } = await reader.read()
-            if(done){
-                break
+        if(v.type === 'streaming'){
+            const reader = v.result.getReader()
+
+            while(true){
+                const { done, value } = await reader.read()
+                if(done){
+                    break
+                }
+                const firstKey = Object.keys(value)[0]
+
+                outputText = value[firstKey]
             }
-            const firstKey = Object.keys(value)[0]
-
-            outputText = value[firstKey]
         }
 
         const extracted = outputText.matchAll(/```(web)?(vtt)?\n(.*?)\n```/gs)
@@ -296,7 +303,7 @@
         }
 
 
-        const v = await requestChatData({
+        let v = await requestChatData({
             formated: [{
                 role: "user",
                 content: risuChatParser(prompt).replace(/{{slot}}/g, selLang).replace(/{{slot::data}}/g, outputText),
@@ -304,6 +311,7 @@
             bias: {},
             useStreaming: true
         }, 'model')
+        v = await resolveRequestJob(v)
 
 
         if(v.type === 'multiline'){
@@ -311,23 +319,29 @@
             return
         }
 
-        if(v.type !== 'streaming'){
+        if(v.type === 'fail'){
             notifyError(v.result)
             return
         }
 
+        if(v.type === 'success'){
+            outputText = v.result
+        }
+
         console.log("Reading...")
 
-        const reader = v.result.getReader()
+        if(v.type === 'streaming'){
+            const reader = v.result.getReader()
 
-        while(true){
-            const { done, value } = await reader.read()
-            if(done){
-                break
+            while(true){
+                const { done, value } = await reader.read()
+                if(done){
+                    break
+                }
+                const firstKey = Object.keys(value)[0]
+
+                outputText = value[firstKey]
             }
-            const firstKey = Object.keys(value)[0]
-
-            outputText = value[firstKey]
         }
         if(!outputText.trim().endsWith('```')){
             outputText = outputText.trim() + '\n```'

@@ -11,6 +11,7 @@ import { generateAIImage, type ImageGenerationOptions } from "./stableDiff";
 import { writeInlayImage, getInlayAsset } from "./files/inlays";
 import type { OpenAIChat, MultiModal } from "./index.svelte";
 import { requestChatData, type StreamResponseChunk } from "./request/request";
+import { resolveRequestJob } from "./request/providerJob";
 import { v4 } from "uuid";
 import { getModuleLorebooks, getModuleTriggers } from "./modules";
 import { Mutex } from "../mutex";
@@ -628,7 +629,7 @@ export async function runScripted(code:string, arg:{
                 }
 
                 const options = parseLuaOptions(optionsStr) as { streaming?: boolean }
-                const result = await requestChatData({
+                let result = await requestChatData({
                     formated: promptbody,
                     bias: {},
                     useStreaming: options.streaming === true,
@@ -636,6 +637,7 @@ export async function runScripted(code:string, arg:{
                     noMultiGen: true,
                     moduleId: ScriptingEngineState.moduleId,
                 }, 'model')
+                result = await resolveRequestJob(result)
 
                 if(result.type === 'fail'){
                     return JSON.stringify({
@@ -675,7 +677,7 @@ export async function runScripted(code:string, arg:{
                 if(!ScriptingLowLevelIds.has(id)){
                     return
                 }
-                const result = await requestChatData({
+                let result = await requestChatData({
                     formated: [{
                         role: 'user',
                         content: prompt
@@ -685,6 +687,7 @@ export async function runScripted(code:string, arg:{
                     noMultiGen: true,
                     moduleId: ScriptingEngineState.moduleId,
                 }, 'model')
+                result = await resolveRequestJob(result)
 
                 if(result.type === 'fail'){
                     return {
@@ -998,7 +1001,7 @@ export async function runScripted(code:string, arg:{
                         success: false
                     })
                 }
-                const result = await requestChatData({
+                let result = await requestChatData({
                     formated: promptbody,
                     bias: {},
                     useStreaming: options.streaming === true,
@@ -1006,6 +1009,7 @@ export async function runScripted(code:string, arg:{
                     noMultiGen: true,
                     moduleId: ScriptingEngineState.moduleId,
                 }, mode as 'emotion' | 'memory' | 'otherAx' | 'submodel' | 'translate')
+                result = await resolveRequestJob(result)
 
                 if(result.type === 'fail'){
                     return JSON.stringify({

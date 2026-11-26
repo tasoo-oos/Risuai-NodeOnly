@@ -5,6 +5,11 @@ export type AdapterKind =
     | 'anthropic-messages'
     | 'google-gemini'
 
+/** Anthropic prompt-cache mode of a ModelPreset: no breakpoints, or a 5m / 1h TTL. */
+export type AnthropicCacheTtl = 'off' | '5m' | '1h'
+
+export const ANTHROPIC_CACHE_TTLS: readonly AnthropicCacheTtl[] = ['off', '5m', '1h']
+
 // Adapter kinds whose tool (function-calling) wire is actually implemented.
 // Both the runtime gate (requestModelPreset) and the editor toggle UI check
 // membership so a preset can never enable tools on an adapter that would reject
@@ -336,6 +341,14 @@ export interface ModelPreset {
     // requests byte-identical to before. Runtime cache state lives in
     // localStorage, never in the db.
     promptCaching?: GeminiPromptCachingConfig
+    // Anthropic prompt-cache breakpoints (anthropic-messages adapter only).
+    // Replaces the global classic `db.claude1HourCaching` for this preset.
+    //   'off' — send no cache_control at all (message.cachePoint is ignored),
+    //   '5m'  — ephemeral breakpoints with the default 5-minute TTL,
+    //   '1h'  — breakpoints with the 1-hour TTL (+ the extended-TTL beta header).
+    // Unset means '5m' (the global switch's factory default is off => 5m
+    // breakpoints), never the user's current global value.
+    anthropicCacheTtl?: AnthropicCacheTtl
     apiKeyRef?: string
     inlineCredential?: unknown
     fallbackModelPresetIds?: string[]

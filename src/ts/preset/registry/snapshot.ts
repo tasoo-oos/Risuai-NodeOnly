@@ -8,6 +8,7 @@ import type {
     ModelLimits,
     ResolvedModelProfileSnapshot,
 } from '../types'
+import { withAnthropicBatchServiceTier } from './anthropicBatchTier'
 
 export class RegistryProfileNotFoundError extends Error {
     readonly profileId: string
@@ -45,9 +46,13 @@ export function resolveSnapshot(registry: RegistryCache, profileId: string): Res
         auth: profile.auth,
         endpoint: profile.endpoint,
         modelId: profile.modelId,
-        schema: backfillSchemaDefaults(
-            mergeSchemas(baseProvider.requestSchema, profile.schema),
-            profile,
+        schema: withAnthropicBatchServiceTier(
+            backfillSchemaDefaults(
+                mergeSchemas(baseProvider.requestSchema, profile.schema),
+                profile,
+            ),
+            baseProvider.adapterKind,
+            profile.providerBaseId,
         ),
         uiSchema: mergeUiSchemas(baseProvider.uiSchema, profile.uiSchema),
         defaults: { ...(baseProvider.defaultBody ?? {}), ...profile.defaults },
