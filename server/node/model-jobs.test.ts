@@ -165,6 +165,8 @@ describe('model-jobs', () => {
             inputTokens: 1234,
             outputTokens: 512,
             maxContext: 32768,
+            decoupledStreaming: true,
+            escapeOutput: true,
         })
         expect(status).toBe(200)
         const jobId = json.jobId as string
@@ -187,6 +189,8 @@ describe('model-jobs', () => {
             inputTokens: 1234,
             outputTokens: 512,
             maxContext: 32768,
+            decoupledStreaming: true,
+            escapeOutput: true,
         })
 
         // Header capture: upstream status + content-type mirrored on the stream.
@@ -212,7 +216,10 @@ describe('model-jobs', () => {
         const { json } = await createJob()
         const jobId = json.jobId as string
         // No reader attached — the server must consume upstream on its own.
-        await waitForStatus(base, jobId, ['done'])
+        const meta = await waitForStatus(base, jobId, ['done'])
+        // Post-processing flags default off when the client does not send them
+        // (older clients), so recovery treats the job as a plain run.
+        expect(meta).toMatchObject({ decoupledStreaming: false, escapeOutput: false })
 
         const streamRes = await fetch(`${base}/api/model-jobs/${jobId}/stream`, {
             headers: { 'risu-auth': AUTH_TOKEN },

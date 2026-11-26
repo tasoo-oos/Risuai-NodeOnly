@@ -59,6 +59,13 @@ export interface JobFetchOptions {
     outputTokens?: number
     maxContext?: number
     streaming: boolean
+    /** The live run drains the stream and returns one whole result
+     *  (preset.decoupledStreaming), so it gets the after-request steps a
+     *  non-streaming run does. Recorded so recovery can do the same. */
+    decoupledStreaming?: boolean
+    /** The live run risuEscape()s the whole result (chat escapeOutput).
+     *  Recorded so a recovered response is escaped the same way. */
+    escapeOutput?: boolean
     /** 'main' = chat generation (recoverable at boot, per-chat guard).
      *  'aux' = pipeline side request (translate / memory / …) riding the job
      *  transport only for its reconnectable stream — relay-only server-side. */
@@ -114,6 +121,8 @@ export function makeJobFetch(opts: JobFetchOptions): typeof fetch {
                     maxContext: opts.maxContext,
                     kind: opts.jobKind ?? 'main',
                     streaming: opts.streaming,
+                    decoupledStreaming: opts.decoupledStreaming === true,
+                    escapeOutput: opts.escapeOutput === true,
                     timeoutMs: opts.timeoutMs,
                 }),
                 signal,
